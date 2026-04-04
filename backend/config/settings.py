@@ -26,12 +26,13 @@ SECRET_KEY = 'django-insecure-*+ol6q#)6uc_rigc_r((@g+ywu2%^)6)gq196kbtdug5)25u$@
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = [q]
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'django_apscheduler',
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
@@ -156,4 +157,5 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
 }
 
+DATABASE_ROUTERS = ['analysis_engine.routers.EduMetricsRouter']
 
