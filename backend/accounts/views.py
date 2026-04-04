@@ -11,7 +11,7 @@ def get_token(user):
         'access':str(refresh.access_token)
     }
 
-@api_view(['GET'])
+@api_view(['POST'])
 def login(request):
     id=request.data.get('advisor_id')
     password=request.data.get('password')
@@ -19,7 +19,7 @@ def login(request):
     if not id :
         return Response({'error':'advisor_id is required'},status=400)
     
-    advisor=Users.objects.filter(advisor_id=id)
+    advisor=Users.objects.filter(advisor_id=id).first()
     if advisor:
         actual= f"{advisor.advisor_name}{advisor.advisor_id[-3::]}"
 

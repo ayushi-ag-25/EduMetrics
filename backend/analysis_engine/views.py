@@ -15,7 +15,7 @@ def get_flaggeddata(request):
 
 @api_view(['GET'])
 def class_performance(request):
-    queryset=weekly_metrics.objects.filter(class_id=request.get('class_id'))
+    queryset=weekly_metrics.objects.filter(class_id=request.data.get('class_id'))
     serializer=performanceSerializer(queryset,many=True,fields=['student_id','academic_performance'])
     return Response(serializer.data)
 

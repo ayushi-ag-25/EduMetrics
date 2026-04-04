@@ -63,8 +63,10 @@ class weekly_flags(models.Model):
     diagnosis=models.TextField()
 
     class Meta:
+        indexes = [
         models.Index(fields=['class_id', 'semester', 'sem_week'], name='idx_wf_class_sem_week'),
-        models.Index(fields=['student_id'], name='idx_wf_student')
+        models.Index(fields=['student_id'], name='idx_wf_student'),
+    ]
     
     def __str__(self):
         return f"Flags for student {self.student_id} in class {self.class_id} at sem {self.semester} week {self.sem_week}"
