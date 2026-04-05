@@ -36,6 +36,7 @@ EduMetrics is an academic advisory intelligence platform built for college advis
 
 The platform is designed around a core belief: **advisors have limited time and many students.** EduMetrics makes sure that time is spent on the students who need it most, with the right context to act effectively.
 
+
 ```
 College Database (read-only)          EduMetrics Analytics Engine
 ┌─────────────────────────┐           ┌────────────────────────────────┐
