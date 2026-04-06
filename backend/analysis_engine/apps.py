@@ -4,5 +4,5 @@ class AnalysisEngineConfig(AppConfig):
     name = 'analysis_engine'
 
     def ready(self):
-        from .scheduler import start
+        from .schedular import start
         start()

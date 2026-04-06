@@ -13,4 +13,4 @@ def sync():
             user = Users(advisor_id=advisor_id, advisor_name=advisor_name, class_id=class_id)
             user.save()
 
-    return {'message': 'synced'}s
+    return {'message': 'synced'}

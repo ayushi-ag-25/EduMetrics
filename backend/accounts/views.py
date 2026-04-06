@@ -31,3 +31,5 @@ def login(request):
             tokens=get_token(advisor)
             res.update(tokens)
             return Response(res)
+        return Response({'error': 'Invalid credentials'}, status=401)
+    return Response({'error': 'Advisor not found'}, status=404)

@@ -8,7 +8,7 @@ class Users(AbstractBaseUser):
     class_id=models.CharField(max_length=20,null=True)
 
     USERNAME_FIELD = 'advisor_id'
-    objects=BaseUserManager
+    objects = BaseUserManager()
     
     def __str__(self):
         return self.advisor_id
