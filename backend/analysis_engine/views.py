@@ -19,6 +19,13 @@ from .serializer import (
     PreSemWatchlistSerializer,
 )
 
+import os
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+import traceback #for effective tracking of errors
+# import the calibrate function
+from .calibrate_analysis_db import calibrate 
+
 
 # ──────────────────────────────────────────────────────────────
 #  EXISTING VIEWS (unchanged)
@@ -257,3 +264,33 @@ def pre_sem_watchlist_student(request):
 
     serializer = PreSemWatchlistSerializer(qs, many=True)
     return Response(serializer.data)
+
+# NEW
+@csrf_exempt #CSRF exempt is used since the request from our streamlit app is not gonna have a CSRF token
+def trigger_calibrate(request):
+    # Django doesn't use @app.route, so we check the method manually
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    # ── Auth ─────────────────────────────────────────────────────────────────
+    secret = os.getenv("INTERNAL_SECRET")
+    # In Django, headers are in request.META and usually prefixed with HTTP_
+    # or you can use request.headers in Django 2.2+
+    provided_secret = request.headers.get("X-Internal-Secret")
+
+    if secret and provided_secret != secret:
+        return JsonResponse({"error": "forbidden"}, status=403)
+
+    # ── Run ──────────────────────────────────────────────────────────────────
+    try:
+        result = calibrate()
+        return JsonResponse(result, status=200)
+    except Exception as e:
+        print(f"[FATAL] calibrate() raised:\n{traceback.format_exc()}")
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+# not sure if we need this function
+def health(request):
+    """Railway health-check endpoint."""
+    return JsonResponse({"status": "ok"}, status=200)
