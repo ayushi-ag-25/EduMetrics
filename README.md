@@ -1,7 +1,5 @@
 <div align="center">
 
-<br/>
-
 ```
 ███████╗██████╗ ██╗   ██╗███╗   ███╗███████╗████████╗██████╗ ██╗ ██████╗███████╗
 ██╔════╝██╔══██╗██║   ██║████╗ ████║██╔════╝╚══██╔══╝██╔══██╗██║██╔════╝██╔════╝
@@ -18,13 +16,9 @@ Know who needs attention. Act early. Spread help smartly.
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Django](https://img.shields.io/badge/Django-4.x-092E20?style=flat-square&logo=django&logoColor=white)
-![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)
-![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.x-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1?style=flat-square&logo=postgresql&logoColor=white)
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-ML-F7931E?style=flat-square&logo=scikit-learn&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-In_Development-yellow?style=flat-square)
-
-<br/>
 
 </div>
 
@@ -32,178 +26,134 @@ Know who needs attention. Act early. Spread help smartly.
 
 ## What Is EduMetrics?
 
-EduMetrics is an academic advisory intelligence platform built for college advisors. It reads data from a college's existing systems — attendance, assignments, quizzes, library usage — and surfaces **who needs attention this week**, complete with plain-English explanations of why.
+EduMetrics is an academic advisory intelligence platform built for college advisors. It connects to a college's existing database — attendance, assignments, quizzes, library usage — and surfaces **who needs attention this week**, complete with plain-English explanations of why.
 
-The platform is designed around a core belief: **advisors have limited time and many students.** EduMetrics makes sure that time is spent on the students who need it most, with the right context to act effectively.
+The platform is built around a core belief: **advisors have limited time and many students.** EduMetrics makes sure that time is spent on the students who need it most, with the right context to act effectively.
 
 ```
 College Database (read-only)          EduMetrics Analytics Engine
 ┌─────────────────────────┐           ┌────────────────────────────────┐
-│  Attendance records     │  ──────▶  │  Layer 1: Raw signal extraction │
-│  Assignment submissions │           │  Layer 2: Score computation      │
-│  Quiz attempts          │           │  Layer 3: Flagging + alerts      │
-│  Library visit logs     │           │  Layer 4: ML prediction (Stage 2)│
+│  Attendance records     │  ──────▶  │  Weekly metrics computation    │
+│  Assignment submissions │           │  Effort + academic scoring     │
+│  Quiz attempts          │           │  Risk flagging + triage        │
+│  Library visit logs     │           │  Pre/post exam analysis        │
 └─────────────────────────┘           └──────────────┬─────────────────┘
                                                       │
                                                       ▼
-                                       Advisor Portal (React + Tailwind)
+                                       REST API (Django REST Framework)
                                        ┌──────────────────────────────┐
-                                       │  Daily flagged student list   │
-                                       │  Student deep-dive analytics  │
-                                       │  Intervention logging         │
-                                       │  Pre/post exam analysis       │
-                                       │  HOD & parent reports         │
+                                       │  Weekly flagged student list  │
+                                       │  Student performance metrics  │
+                                       │  Pre/post midterm analysis    │
+                                       │  End-of-semester predictions  │
                                        └──────────────────────────────┘
 ```
 
 ---
 
-## The Problem We're Solving
+## The Problem
 
-Most colleges track student data. Very few use it proactively. An advisor managing 60+ students has no practical way to know that **Arjun's attendance dropped 18% over the last 3 weeks**, or that **Meera hasn't submitted an assignment in 12 days**, until it shows up as a fail on a result sheet — by which point intervention is too late.
+Most colleges track student data. Very few use it proactively. An advisor managing 60+ students has no practical way to know that **a student's attendance dropped 18% over the last 3 weeks**, or that **someone hasn't submitted an assignment in 12 days** — until it shows up as a fail on a result sheet. By that point, intervention is too late.
 
-EduMetrics closes that gap. Every Sunday, the system recalculates metrics for every student. Every Monday, the advisor opens a dashboard that tells them exactly who to reach out to, why, and with what context.
-
----
-
-## Key Features
-
-### Stage 1 — Rule-Based Flagging Engine *(current)*
-- **Weekly risk scoring** across 4 signal sources: attendance, assignments, quizzes, library
-- **Three-layer framework**: raw signals → computed scores → risk labels (Critical / Watch / Monitor / Safe)
-- **Plain-English flag reasons** — not just a number, but *why* the student was flagged
-- **Exculpatory context** — high assignment load reduces latency penalty automatically
-- **Pre-midterm analysis** — predicted exam scores generated 2 weeks before exams
-- **Post-midterm analysis** — actual vs predicted gap, underperformers flagged immediately
-- **Pre / post end-term analysis** — pass/fail risk, semester narrative generation
-- **Automatic scheduling** — weekly and exam-window analyses run on cron, zero manual triggers
-
-### Stage 2 — ML Layer *(upcoming)*
-- Learned risk weights replacing fixed formula weights (Logistic Regression, Random Forest, XGBoost)
-- Archetype classifier — by Week 3, predict which behavioral archetype a student is trending toward
-- Backlog subject predictor — predict failure at subject level, not just overall
-- Recovery probability model — post-midterm prediction of end-term recovery likelihood
-- Intervention effectiveness model — learn which advisor actions work for which student profiles
-
-### Stage 3 — Advisor Portal *(upcoming)*
-- **Student Galaxy view** — scatter plot where every student is a point, colored by risk
-- **Intervention logger** — pick from saved list, voice type, or free text
-- **Gmail integration** — one-click email to student or parent with AI-generated starter template
-- **HOD report generator** — Claude API generates formal class summary on demand
-- **Semester report** — full narrative of a student's semester arc, downloadable
+EduMetrics closes that gap. Every week, the system recalculates metrics for every student and surfaces a ranked triage list: exactly who to reach out to, why, and with what context.
 
 ---
 
 ## Architecture
 
+EduMetrics uses a **dual-database design**: it reads from the college's existing database (read-only) and writes its own analytics results to a separate analysis database. The college's data is never modified.
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        EduMetrics System                         │
-│                                                                   │
-│  ┌──────────────┐    ┌──────────────────┐    ┌───────────────┐  │
-│  │   React +    │    │  Django / Flask   │    │  PostgreSQL   │  │
-│  │  Tailwind    │◀──▶│   REST API        │◀──▶│  (Supabase)   │  │
-│  │  Frontend    │    │                  │    │               │  │
-│  └──────────────┘    └────────┬─────────┘    └───────────────┘  │
-│                               │                                   │
-│                    ┌──────────▼──────────┐                       │
-│                    │   Analytics Engine   │                       │
-│                    │   (Python)           │                       │
-│                    │                      │                       │
-│                    │  engine/features.py  │                       │
-│                    │  engine/scores.py    │                       │
-│                    │  engine/risk.py      │                       │
-│                    │  engine/flags.py     │                       │
-│                    │  engine/scheduler.py │                       │
-│                    └──────────┬──────────┘                       │
-│                               │                                   │
-│            ┌──────────────────┼──────────────────┐               │
-│            ▼                  ▼                   ▼               │
-│     ┌────────────┐   ┌──────────────┐   ┌──────────────────┐    │
-│     │  ML Models │   │  Cron Jobs   │   │   Claude API     │    │
-│     │ (sklearn / │   │ (Render /    │   │ (report & email  │    │
-│     │  XGBoost)  │   │  GitHub Act.)│   │  generation)     │    │
-│     └────────────┘   └──────────────┘   └──────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────┐     Django ORM      ┌────────────────────────┐
+│   Client DB      │  ◀── (read-only) ── │                        │
+│  (college data)  │                     │   Analytics Engine     │
+│                  │                     │   (Python / Django)    │
+│  Students        │                     │                        │
+│  Attendance      │                     │  weekly_metrics_       │
+│  Assignments     │                     │    calculator.py       │
+│  Quizzes         │                     │  flagging.py           │
+│  Library visits  │                     │  pre_mid_term.py       │
+│  Exam results    │                     │  pre_end_term.py       │
+└──────────────────┘                     │  pre_sem.py            │
+                                         └────────────┬───────────┘
+┌──────────────────┐                                  │ writes
+│   Analysis DB    │  ◀───────────────────────────────┘
+│  (EduMetrics)    │
+│                  │
+│  WeeklyMetrics   │
+│  WeeklyFlag      │
+│  PreMidTerm      │
+│  PreEndTerm      │
+│  Predictions     │
+│  Watchlists      │
+└──────────────────┘
 ```
+
+Database routing is handled automatically — all `ClientXxx` models route to `client_db`, all analysis models route to `default`.
 
 ---
 
-## Risk Flagging Framework
+## Analytics Engine
 
-EduMetrics computes a 0–100 **Overall Risk Score** from three component scores:
+### Weekly Metrics (`weekly_metrics_calculator.py`)
 
-```
-Overall Risk Score  =  0.45 × Disengagement Score
-                    +  0.40 × Academic Risk Score
-                    +  0.15 × Behavioral Consistency Score
-```
+Every week, the engine computes two scores per student:
 
-### Disengagement Score
-```
-0.35 × attendance gap from threshold
-0.25 × submission rate gap
-0.20 × quiz attempt gap
-0.12 × submission latency penalty  (reduced when active load is high)
-0.08 × library engagement gap
-```
+**Effort Score** — measures behavioural engagement across 6 signals:
 
-### Academic Risk Score
-```
-0.50 × assignment quality gap
-0.25 × attendance trend penalty (slope over 3 weeks)
-0.15 × quiz score gap
-0.10 × plagiarism flag
-```
+| Signal | Weight |
+|--------|--------|
+| Library visits | 25% |
+| Book borrows | 20% |
+| Assignment quality | 20% |
+| Plagiarism penalty | 15% |
+| Attendance rate | 10% |
+| Quiz + assignment submission rate | 10% |
 
-### Behavioral Consistency Score
-```
-Standard deviation of weekly attendance over last 4 weeks
-+ Standard deviation of weekly submission rate over last 4 weeks
-(normalised 0–100)
-```
+**Academic Performance Score** — a weighted composite of the student's last 3 weeks, with more recent weeks weighted higher (40 / 30 / 30).
 
-### Risk Labels
+Both scores are written to the `WeeklyMetrics` table in the analysis DB. Exam weeks (Week 8 midterm, Week 18 end-term) are excluded from trend calculations to avoid distorting the baseline.
 
-| Score | Label | Action |
-|-------|-------|--------|
-| 70 – 100 | 🔴 Critical | Advisor must act this week |
-| 45 – 69 | 🟠 Watch | Monitor closely, prepare intervention |
-| 25 – 44 | 🟡 Monitor | On the radar, review next week |
-| 0 – 24 | 🟢 Safe | No action needed |
+### Weekly Flagging (`flagging.py`)
 
-> **Note on weights:** These are the Stage 1 manually tuned values. In Stage 2, ML models will learn these weights from actual semester outcome data, replacing guesses with evidence.
+After metrics are computed, the flagging engine identifies students who need advisor attention. It:
+
+- Reads the current simulator week and derives semester context (odd/even slot, current semester per class)
+- Computes a 4-week baseline window (excluding exam weeks) to detect meaningful deviations
+- Applies a **grace period** for the first 3 weeks of semester (flags are softer while patterns establish)
+- Tracks **escalation memory** — students who were flagged last week are escalated, not re-flagged from scratch
+- Writes triage results to `WeeklyFlag` with plain-English reasons
+
+### Semester Analysis Windows
+
+Analysis runs at 5 points in the semester, triggered by the scheduler or manually:
+
+| Module | When | What It Does |
+|--------|------|--------------|
+| `pre_sem.py` | Start of semester | Generates a watchlist based on prior semester performance |
+| `weekly_metrics_calculator.py` + `flagging.py` | Every week | Computes scores, flags at-risk students |
+| `pre_mid_term.py` | Before Week 8 | Predicts midterm exam scores, flags students at risk of failing |
+| `pre_end_term.py` | Before Week 18 | Predicts end-term outcomes, generates pass/fail risk per student |
+| Post-analysis | After results | Compares actuals to predictions, identifies underperformers |
 
 ---
 
-## Semester Analysis Windows
+## REST API
 
-EduMetrics runs five types of analysis, all triggered automatically:
+Built with Django REST Framework. Key endpoints (all in `analysis_engine/`):
 
-| Window | When | What Runs |
-|--------|------|-----------|
-| **Weekly Pulse** | Every Sunday | All metrics recalculated, snapshots written, alert queue updated |
-| **Pre-Midterm** | Week 6 | Predicted exam scores generated, at-risk students prioritised |
-| **Post-Midterm** | Week 9 | Actual vs predicted gap, underperformer flags, baseline reset |
-| **Pre-End Term** | Week 14 | Pass/fail risk per subject, intervention recommendations |
-| **Post-End Term** | Week 17 | Semester outcomes, year-on-year comparison, narrative generation |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/flagged/` | GET | Weekly triage list filtered by semester, week, and class |
+| `/class-performance/` | GET | Aggregated performance for a class |
+| `/student-performance/` | GET | Individual student metrics for a given week |
+| `/pre-midterm/` | GET | Pre-midterm predictions per student |
+| `/pre-endterm/` | GET | End-term risk predictions |
+| `/risk-of-failing/` | GET | Per-subject fail risk predictions |
+| `/watchlist/` | GET | Pre-semester watchlist |
+| `/calibrate/` | POST | Triggers a full recalibration of the analysis DB |
 
----
-
-## Tech Stack
-
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Frontend | React 18 + Vite | Component-based, fast, great ecosystem for dashboards |
-| Styling | Tailwind CSS | Utility-first, consistent design tokens, no CSS files |
-| Backend | Django 4 or Flask | Python-native so ML and API live in same codebase |
-| Database | PostgreSQL (Supabase) | Relational — student data is deeply relational; Supabase is always-on free tier |
-| ML | scikit-learn, XGBoost, Prophet | Industry standard tabular ML; Prophet for time-series GPA forecasting |
-| HTTP client | Axios | API calls from frontend |
-| Auth | JWT (djangorestframework-simplejwt) | Role-based access: advisor / HOD / admin |
-| Scheduling | Render Cron Jobs | Serverless cron — no always-on server needed for background jobs |
-| AI layer | Anthropic Claude API | Report generation, email templates, flag explanations |
-| Deployment | Render (backend) + Vercel (frontend) | Free tiers sufficient for college-scale deployment |
+A custom database router (`routers.py`) handles directing reads/writes to the correct database automatically.
 
 ---
 
@@ -212,116 +162,39 @@ EduMetrics runs five types of analysis, all triggered automatically:
 ```
 EduMetrics/
 │
-├── backend/                        # Django or Flask API
-│   ├── app/
-│   │   ├── api/
-│   │   │   ├── auth.py             # Login, JWT, role management
-│   │   │   ├── students.py         # Caseload, student detail endpoints
-│   │   │   ├── analytics.py        # Dashboard, alerts, trends
-│   │   │   ├── insights.py         # Claude API — briefings, reports
-│   │   │   └── recalculate.py      # Cron-triggered analysis endpoint
-│   │   ├── engine/
-│   │   │   ├── features.py         # Layer 1 → Layer 2 feature extraction
-│   │   │   ├── scores.py           # Disengagement, Academic Risk, Behavioral scores
-│   │   │   ├── risk.py             # Overall risk score + label
-│   │   │   ├── flags.py            # Plain-English flag reason generator
-│   │   │   ├── snapshots.py        # Write computed results to analytics DB
-│   │   │   └── scheduler.py        # Maps analysis windows to trigger weeks
-│   │   ├── jobs/
-│   │   │   ├── weekly_pulse.py     # Runs every Sunday
-│   │   │   ├── pre_midterm.py      # Week 6
-│   │   │   ├── post_midterm.py     # Week 9
-│   │   │   ├── pre_endterm.py      # Week 14
-│   │   │   └── post_endterm.py     # Week 17
-│   │   ├── ml/
-│   │   │   ├── train.py            # Model training pipeline (Stage 2)
-│   │   │   ├── predict.py          # Inference on new student data
-│   │   │   └── models/             # Saved .pkl model files
-│   │   ├── simulator/
-│   │   │   ├── advance_week.py     # Advances DB state by one week
-│   │   │   ├── run_exam.py         # Generates midterm/endterm marks
-│   │   │   └── state.py            # Tracks current sim week per section
-│   │   └── services/
-│   │       └── claude.py           # Anthropic API wrapper
-│   ├── generate_dataset.py         # Synthetic data generation script
-│   ├── requirements.txt
-│   └── .env.example
-│
-├── frontend/                       # React + Tailwind
-│   ├── src/
-│   │   ├── pages/
-│   │   │   ├── Login.jsx
-│   │   │   ├── Dashboard.jsx       # Daily flags + summary stats
-│   │   │   ├── StudentDetail.jsx   # Deep-dive metrics + AI insights
-│   │   │   ├── WeeklyAnalysis.jsx  # What changed this week
-│   │   │   ├── AlertQueue.jsx      # Ranked at-risk list
-│   │   │   ├── Interventions.jsx   # Log + manage interventions
-│   │   │   ├── Schedule.jsx        # 18-week timeline
-│   │   │   └── Galaxy.jsx          # Student scatter plot (Stage 3)
-│   │   ├── components/
-│   │   │   ├── StudentCard.jsx
-│   │   │   ├── RiskBadge.jsx
-│   │   │   ├── MetricBar.jsx
-│   │   │   ├── Sparkline.jsx
-│   │   │   ├── AIInsightPanel.jsx
-│   │   │   └── InterventionLogger.jsx
-│   │   ├── api/
-│   │   │   └── client.js           # Axios instance with JWT interceptor
-│   │   └── store/
-│   │       └── auth.js             # Zustand auth store
-│   ├── tailwind.config.js
-│   └── .env.example
-│
-├── database/
-│   ├── schema.sql                  # All CREATE TABLE statements
-│   └── migrations/
-│
-└── README.md
-```
-
----
-
-## Database Schema
-
-### Dummy College DB *(read-only — EduMetrics never writes here)*
-
-```sql
-students          student_id, batch_id, name, roll_number, gender, email,
-                  parent_email, year, branch, semester
-
-attendance        student_id, batch_id, semester, week, week_start_date,
-                  subject, lectures_held, present, absent, late, attendance_pct
-
-assignments       student_id, batch_id, semester, assignment_id, subject,
-                  due_week, due_date, active_load, status, submission_date,
-                  latency_hours, marks_obtained, max_marks, quality_pct, plagiarism_pct
-
-quizzes           student_id, batch_id, semester, quiz_id, subject, week,
-                  quiz_date, attempted, marks_obtained, max_marks, score_pct
-
-library_visits    student_id, batch_id, semester, week, week_start_date,
-                  physical_visits
-
-book_borrows      borrow_id, student_id, batch_id, semester, book_title,
-                  borrow_date, return_date, borrow_week, return_week
-
-exams             student_id, batch_id, semester, subject, exam_type,
-                  exam_week, exam_date, marks_obtained, max_marks, score_pct
-```
-
-### Analytics DB *(EduMetrics writes here)*
-
-```sql
-snapshots         student_id, semester, week, disengagement_score,
-                  academic_risk_score, behavioral_score, overall_risk_score,
-                  risk_label, flag_reasons (JSON), computed_at
-
-alerts            student_id, advisor_id, alert_type, message, is_read, created_at
-
-interventions     intervention_id, student_id, advisor_id, week,
-                  intervention_type, notes, timestamp
-
-advisor_notes     note_id, student_id, advisor_id, note_text, created_at
+└── backend/
+    ├── manage.py
+    ├── requirements.txt
+    │
+    ├── config/
+    │   ├── settings.py         # Dual-DB config, JWT auth, DRF settings
+    │   ├── urls.py             # Root URL routing
+    │   ├── wsgi.py
+    │   └── asgi.py
+    │
+    ├── accounts/               # Custom user model + auth
+    │   ├── models.py           # Users model (AUTH_USER_MODEL)
+    │   ├── views.py            # Login / registration endpoints
+    │   └── addingdata.py       # Seed utilities
+    │
+    └── analysis_engine/        # Core analytics
+        ├── client_models.py    # Read-only models for college DB (managed=False)
+        ├── models.py           # Analysis DB models (WeeklyMetrics, WeeklyFlag, etc.)
+        ├── routers.py          # DB router: client_db vs default
+        ├── serializer.py       # DRF serializers for all analysis models
+        ├── views.py            # API view functions
+        ├── urls.py             # Analysis engine URL patterns
+        │
+        ├── weekly_metrics_calculator.py   # Effort + academic score computation
+        ├── flagging.py                    # Weekly triage engine
+        ├── pre_mid_term.py                # Pre-midterm analysis
+        ├── pre_end_term.py                # Pre-end-term analysis
+        ├── pre_sem.py                     # Start-of-semester watchlist
+        ├── calibrate_analysis_db.py       # Full DB recalibration
+        ├── scheduler.py                   # Maps weeks to analysis jobs
+        │
+        └── management/commands/
+            └── run_weekly.py              # Django management command for weekly run
 ```
 
 ---
@@ -332,203 +205,132 @@ advisor_notes     note_id, student_id, advisor_id, note_text, created_at
 
 ```
 Python 3.11+
-Node.js 20+
+PostgreSQL (or Supabase)
 Git
-PostgreSQL (or a free Supabase account)
 ```
 
-### 1. Clone the repository
+### 1. Clone and set up the environment
 
 ```bash
 git clone https://github.com/your-username/EduMetrics.git
-cd EduMetrics
-```
+cd EduMetrics/backend
 
-### 2. Backend setup
-
-```bash
-cd backend
-
-# Create and activate virtual environment
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
-
-# Configure environment variables
-cp .env.example .env
-# Edit .env — fill in DATABASE_URL, SECRET_KEY, ANTHROPIC_API_KEY, CRON_SECRET
 ```
 
-### 3. Generate the synthetic dataset
+### 2. Configure databases
 
-```bash
-# Generates all CSV files + academic_dataset.xlsx
-python generate_dataset.py
+EduMetrics requires two PostgreSQL databases: one for the college's existing data (or a replica/seed), and one for the analysis results.
 
-# Then load into your database:
-# Option A — Supabase: Table Editor → Import CSV for each file
-# Option B — psql: \copy table_name FROM 'file.csv' CSV HEADER
-```
-
-### 4. Run the backend
-
-```bash
-# Django
-python manage.py migrate
-python manage.py runserver
-
-# Flask
-flask run --port 8000
-```
-
-### 5. Frontend setup
-
-```bash
-cd ../frontend
-
-npm install
-cp .env.example .env
-# Set VITE_API_BASE_URL=http://localhost:8000
-
-npm run dev
-# Runs at http://localhost:5173
-```
-
-### 6. Trigger your first weekly analysis
-
-```bash
-# Run the weekly pipeline manually
-python -m app.jobs.weekly_pulse
-
-# Or advance the simulator by one week
-python -m app.simulator.advance_week --section "BTech CS Year 1" --week 3
-```
-
----
-
-## Environment Variables
-
-### Backend `.env`
+Create a `.env` file in `backend/`:
 
 ```env
-DATABASE_URL=postgresql://user:password@host:5432/edumetrics
-SECRET_KEY=your-long-random-secret-key-here
-ANTHROPIC_API_KEY=sk-ant-api03-...
-CRON_SECRET=random-string-used-to-authenticate-cron-calls
+# Analysis DB (EduMetrics writes here)
+DEFAULT_DB_URL=postgresql://user:password@host:5432/edumetrics_analysis
+
+# Client DB (college data — read-only)
+CLIENT_DB_URL=postgresql://user:password@host:5432/college_data
+
+SECRET_KEY=your-long-random-secret-key
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
 ```
 
-### Frontend `.env`
-
-```env
-VITE_API_BASE_URL=http://localhost:8000
-```
-
-Generate `SECRET_KEY` and `CRON_SECRET` with:
+Generate a secret key:
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
----
-
-## Running the Semester Simulator
-
-EduMetrics ships with a simulator that advances the database state week by week, letting you demo a full semester without waiting for one.
+### 3. Run migrations
 
 ```bash
-# Advance a specific section by one week
-python -m app.simulator.advance_week --section "BTech CS Year 1" --week 4
+# Migrate the analysis DB
+python manage.py migrate
 
-# Run midterm exams for a section
-python -m app.simulator.run_exam --section "BTech CS Year 2" --type midterm
-
-# Run a full 18-week semester automatically
-python -m app.simulator.run_full_semester --section "BTech CS Year 1"
+# The client DB is read-only (managed=False models) — no migrations needed for it
 ```
 
-After each advance, the weekly pipeline recalculates and the advisor dashboard reflects the updated state.
+### 4. Start the server
+
+```bash
+python manage.py runserver
+# API available at http://localhost:8000
+```
+
+### 5. Run the weekly analysis
+
+```bash
+# Via management command
+python manage.py run_weekly
+
+# Or trigger via API (POST to /api/calibrate/)
+```
 
 ---
 
-## Deployment
+## Authentication
 
-### Backend → Render (free tier)
+EduMetrics uses JWT authentication via `djangorestframework-simplejwt`. A custom `Users` model is set as `AUTH_USER_MODEL`.
 
-1. New Web Service → connect GitHub repo
-2. Root directory: `backend`
-3. Build command: `pip install -r requirements.txt`
-4. Start command: `gunicorn app.wsgi:application` (Django) or `gunicorn app:app` (Flask)
-5. Add all environment variables
+Obtain a token:
+```
+POST /api/token/
+{ "username": "...", "password": "..." }
+```
 
-### Cron Jobs → Render Cron Jobs (free tier)
+Include in subsequent requests:
+```
+Authorization: Bearer <access_token>
+```
 
-| Job | Cron Schedule | Command |
-|-----|--------------|---------|
-| Weekly Pulse | `0 6 * * 1` | `python -m app.jobs.weekly_pulse` |
-| Pre-Midterm | Set to your Week 6 date | `python -m app.jobs.pre_midterm` |
-| Post-Midterm | Set to your Week 9 date | `python -m app.jobs.post_midterm` |
-| Pre-End Term | Set to your Week 14 date | `python -m app.jobs.pre_endterm` |
-| Post-End Term | Set to your Week 17 date | `python -m app.jobs.post_endterm` |
+---
 
-### Frontend → Vercel (free tier)
+## Database Schema (Analysis DB)
 
-1. New Project → import GitHub repo
-2. Framework preset: Vite
-3. Root directory: `frontend`
-4. Environment variable: `VITE_API_BASE_URL=https://your-app.onrender.com`
-5. Deploy
+The tables EduMetrics writes to:
+
+| Table | Contents |
+|-------|----------|
+| `weekly_metrics` | Per-student effort score + academic performance, per week |
+| `weekly_flags` | Triage output — flagged students with risk level and reasons |
+| `pre_mid_term` | Predicted midterm scores and at-risk flags |
+| `pre_end_term` | End-term pass/fail risk per student |
+| `risk_of_failing_prediction` | Per-subject failure probability |
+| `pre_sem_watchlist` | Start-of-semester carry-over watchlist |
+| `intervention_log` | Advisor intervention records |
+
+The client DB schema (college data) is accessed through `ClientXxx` unmanaged models and is never modified by EduMetrics.
 
 ---
 
 ## Roadmap
 
-- [x] Synthetic dataset generator — 3 batches × 8 semesters × all signal types
-- [x] Layer 1–3 flagging framework designed and documented
-- [x] Project task checklist (all 3 stages)
-- [ ] **Stage 1** — Analytics engine: feature extraction, score computation, flag generation
-- [ ] **Stage 1** — Semester simulator: advance_week, run_exam scripts
-- [ ] **Stage 1** — Pre/post midterm and end-term analysis pipelines
-- [ ] **Stage 1** — REST API layer (Django/Flask)
-- [ ] **Stage 1** — Core advisor portal: daily flags, student detail, weekly analysis
-- [ ] **Stage 2** — ML risk classifier: Logistic Regression → Random Forest → XGBoost
-- [ ] **Stage 2** — Backlog subject predictor per student
-- [ ] **Stage 2** — Archetype classifier (Week 3 early prediction)
-- [ ] **Stage 2** — Intervention effectiveness model
-- [ ] **Stage 3** — Student Galaxy scatter view
-- [ ] **Stage 3** — Intervention logger with voice input
-- [ ] **Stage 3** — Gmail integration + parent report mailer
-- [ ] **Stage 3** — WOW feature *(TBD — team ideation session)*
-
----
-
-## Student Archetypes
-
-EduMetrics synthetic data includes 7 behaviorally distinct archetypes. Each follows a specific trajectory, giving the flagging engine meaningful patterns to detect and later for ML to learn from.
-
-| Archetype | Behavior Pattern | Expected Outcome |
-|-----------|-----------------|-----------------|
-| **High Performer** | Consistently high across all signals | Distinction |
-| **Consistent Avg** | Stable mid-range, no dramatic swings | Pass |
-| **Late Bloomer** | Poor start, strong recovery after Week 10 | Pass |
-| **Slow Fader** | Good start, gradual week-on-week decline | Backlog |
-| **Crammer** | Low steady-state, spikes before exams only | Borderline |
-| **Crisis Student** | Fine until Week 9, then sharp drop across all signals | Fail |
-| **Silent Disengager** | Okay attendance and grades, zero quiz/library engagement | Fail |
-
-> The **Late Bloomer** and **Silent Disengager** are the hardest to catch with fixed rules and are the primary motivation for the ML layer in Stage 2.
+- [x] Dual-database architecture with custom ORM router
+- [x] Custom JWT auth with role-based user model
+- [x] Weekly metrics calculator (effort + academic performance scores)
+- [x] Weekly flagging engine with escalation memory and grace period logic
+- [x] Pre-midterm analysis pipeline
+- [x] Pre-end-term analysis pipeline
+- [x] Pre-semester watchlist generation
+- [x] REST API with DRF serializers
+- [x] Management command for weekly runs
+- [ ] Frontend — React + Tailwind advisor portal
+- [ ] Student Galaxy scatter view
+- [ ] Intervention logger
+- [ ] ML risk classifier (Stage 2)
+- [ ] Claude API integration for AI-generated briefings and reports
+- [ ] Gmail integration for advisor-to-student/parent emails
 
 ---
 
 ## Contributing
 
-This project is in active development.
-
-1. Branch off `main` → `feature/your-feature-name`
+1. Branch from `main` → `feature/your-feature-name`
 2. Keep commits small and descriptive
-3. Before opening a PR, verify the analytics engine runs clean: `python -m app.jobs.weekly_pulse`
+3. Before opening a PR, verify the weekly pipeline runs cleanly: `python manage.py run_weekly`
 4. Document any new environment variables in `.env.example`
 
 ---
