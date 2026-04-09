@@ -25,6 +25,4 @@ urlpatterns = [
     path('api/logout/', TokenBlacklistView.as_view(), name='logout'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 
-    # Health check (for Railway / Render)
-    path('health/', health, name='health_root'),
 ]
