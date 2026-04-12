@@ -557,14 +557,14 @@ def student_detail(request, student_id):
 
         # Charts
         'week_labels': [f"W{r['sem_week']}" for r in traj],
-        'week_et':     week_et,
-        'week_at':     week_at,
-        'week_perf':   week_perf,
-        'week_quiz':   [_f(r['quiz_avg_pct'])  for r in traj],
+        'weekEt':     week_et,
+        'weekAt':     week_at,
+        'weekPerf':   week_perf,
+        'weekQuiz':   [_f(r['quiz_avg_pct'])  for r in traj],
 
         # History
-        'flag_history':         flag_hist,
-        'intervention_history': int_hist,
+        'flagHistory':         flag_hist,
+        'interventionHistory': int_hist,
 
         # Aligned names (frontend expects these exact keys)
         'avgEt':          round(sum(week_et) / max(len(week_et), 1), 1),
@@ -701,7 +701,7 @@ def class_analytics(request):
             'week':       f"W{r['sem_week']}",
             'avg_effort': _f(r['avg_effort']),
             'avg_perf':   _f(r['avg_perf']),
-            'avg_att':    round(_f(r['avg_att']) * 100, 1),
+            'avg_att':    round(_f(r['avg_att']), 1),
         } for r in weekly_avgs],
     })
 

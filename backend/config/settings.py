@@ -172,7 +172,7 @@ CORS_ALLOWED_ORIGINS = [
 ]
 # During development with a plain HTML frontend opened from file:// you can
 # set CORS_ALLOW_ALL_ORIGINS = True in a local .env override.
-CORS_ALLOW_ALL_ORIGINS = False   # flip to True locally if needed
+CORS_ALLOW_ALL_ORIGINS = True   # flip to True locally if needed
 
 # ── Allow the trigger_calibrate endpoint without auth (it's secret-key guarded)
 # Add any view names here that should bypass JWT authentication.
