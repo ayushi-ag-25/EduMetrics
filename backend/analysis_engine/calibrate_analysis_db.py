@@ -196,7 +196,7 @@ def _log_event(event_type, client_week, analysis_sem_week, semester,
 # ══════════════════════════════════════════════════════════════
 # 5. SCRIPT REGISTRY
 #    event_name → (dotted_module_path, function_name) or None
-#
+#--
 #    To add a new script: add one line here. Nothing else changes.
 # ══════════════════════════════════════════════════════════════
 

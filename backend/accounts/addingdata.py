@@ -3,7 +3,6 @@ this thing is not affecting calibrate() at all ,it just reads advisors table
 keep it inside calibrate ,separate from it in apps.py doesnt matter
 '''
 
-
 #later use this analyis engibe @api_view(['POST'])
 
 from .models import Users 
