@@ -284,16 +284,26 @@ def run(sem_week=None, semester=None):
     """
     print("  [pre_end_term] Starting ...")
 
-    ctx = _get_sim_context()
-    if sem_week is None:
+    # in absence of calibrate_analysis_db
+    if not(sem_week or semester):
+        ctx = _get_sim_context()
         sem_week = ctx['sem_week']
-    sem_map  = ctx['sem_map']
+        sem_map  = ctx['sem_map']
+        rep_semester = min(sem_map.values())
+        if sem_week != PRE_END_WEEK:
+            print(f"  [pre_end_term] Skipped — sem_week={sem_week}, fires only at week {PRE_END_WEEK}.")
+            return
 
-    if sem_week != PRE_END_WEEK:
-        print(f"  [pre_end_term] Skipped — sem_week={sem_week}, fires only at week {PRE_END_WEEK}.")
-        return
+    # when calibrate_analysis_db is written
+    else:
+        rep_semester=semester
+        classes = list(ClientClass.objects.using('client_db').all())
+        # this part could be wrong
+        sem_map = {
+            cls.class_id: (cls.odd_sem if semester == 1 else cls.even_sem)
+            for cls in classes
+            }
 
-    rep_semester = min(sem_map.values())
     print(f"  [pre_end_term] sem_week={sem_week}  semester={rep_semester}")
 
     # ── Load model weights ─────────────────────────────────────

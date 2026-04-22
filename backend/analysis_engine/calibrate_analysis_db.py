@@ -204,7 +204,6 @@ SCRIPT_REGISTRY = {
     # Weekly (run every teaching week)
     'weekly_metrics':    ('analysis_engine.weekly_metrics_calculator', 'run'),
     'weekly_flags':      ('analysis_engine.flagging', 'generate_weekly_triage'),
-    # 'risk_of_detention': ('analysis_engine.risk_of_detention', 'run_detention_risk'),
     'risk_of_failing':   ('analysis_engine.risk_of_failing',   'run_failing_risk'),
 
     # Event-based (run once at a specific week)
@@ -310,18 +309,16 @@ def _scripts_for_week(sem_week, global_week):
     if sem_week >= FLAG_START_WEEK:
         scripts.append('weekly_flags')
 
-    # 3. Detention risk — every teaching week
-    # scripts.append('risk_of_detention')
 
-    # 4. Fail-risk prediction — week 10 onwards
+    # 3. Fail-risk prediction — week 10 onwards
     if sem_week >= RISK_OF_FAILING_WEEK:
         scripts.append('risk_of_failing')
 
-    # 5. Predicted midterm score — weeks 6 and 7
+    # 4. Predicted midterm score — weeks 6 and 7
     if sem_week in PRE_MID_WEEKS:
         scripts.append('pre_mid_sem')
 
-    # 6. Predicted endterm score — week 17 only
+    # 5. Predicted endterm score — week 17 only
     if sem_week == PRE_END_WEEK:
         scripts.append('pre_end_sem')
 

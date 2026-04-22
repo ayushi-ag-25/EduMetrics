@@ -4,6 +4,8 @@ from rest_framework.decorators import api_view
 from .models import Users
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.response import Response
+from django.db.models import Max
+from analysis_engine.models import weekly_metrics
 
 def get_token(user):
     refresh=RefreshToken.for_user(user)
@@ -26,11 +28,27 @@ def login(request):
         actual= f"{advisor.advisor_name}{advisor.advisor_id[-3::]}"
 
         if password==actual:
-            res={'message':'Login successful',
-                          'class_id':advisor.class_id,
-                          'advisor_id':advisor.advisor_id, 
-                          'advisor_name': advisor.advisor_name}
-            tokens=get_token(advisor)
+            # Get latest semester and week for this advisor's class
+            agg = weekly_metrics.objects.filter(
+                class_id=advisor.class_id
+            ).aggregate(max_semester=Max('semester'))
+            max_sem = agg['max_semester'] or 1
+
+            agg2 = weekly_metrics.objects.filter(
+                class_id=advisor.class_id,
+                semester=max_sem
+            ).aggregate(max_week=Max('sem_week'))
+            max_week = agg2['max_week'] or 1
+
+            res = {
+                'message':      'Login successful',
+                'class_id':     advisor.class_id,
+                'advisor_id':   advisor.advisor_id,
+                'advisor_name': advisor.advisor_name,
+                'semester':     max_sem,
+                'sem_week':     max_week,
+            }
+            tokens = get_token(advisor)
             res.update(tokens)
             return Response(res)
         return Response({'error': 'Invalid credentials'}, status=401)

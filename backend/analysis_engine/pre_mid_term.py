@@ -220,16 +220,27 @@ def _write_predictions(predictions, sem_map, current_sem_week):
 # ══════════════════════════════════════════════════════════════
 
 def run(sem_week=None, semester=None):
-    ctx = _get_sim_context()
-    if sem_week is None:
-        sem_week = ctx['sem_week']  # only falls back to DB if not passed in
-    sem_map  = ctx['sem_map']
 
-    if sem_week not in PRE_MID_WEEKS:
-        print(f"  [pre_mid_term] Skipped — sem_week={sem_week}, fires only at weeks {sorted(PRE_MID_WEEKS)}.")
-        return
+    # when we remove calibrate_analysis_db
+    if not(sem_week or semester):
+        ctx = _get_sim_context()
+        sem_week = ctx['sem_week']  
+        sem_map  = ctx['sem_map']
+        if sem_week not in PRE_MID_WEEKS:
+            print(f"  [pre_mid_term] Skipped — sem_week={sem_week}, fires only at weeks {sorted(PRE_MID_WEEKS)}.")
+            return
+        rep_semester = min(sem_map.values())
 
-    rep_semester = min(sem_map.values())
+    # when using calibrate_analysi_db
+    else:
+        rep_semester=semester
+        classes = list(ClientClass.objects.using('client_db').all())
+        # this part could be wrong
+        sem_map = {
+            cls.class_id: (cls.odd_sem if semester == 1 else cls.even_sem)
+            for cls in classes
+            }
+
     print(f"  [pre_mid_term] sem_week={sem_week}  semester={rep_semester}")
 
     # ── Load model weights ─────────────────────────────────────

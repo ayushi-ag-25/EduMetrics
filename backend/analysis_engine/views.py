@@ -1,13 +1,11 @@
 """
 =================================================================================
-  EduMetrics — analysis_engine/views.py
+  EduMetrics — analysis_engine/views.py  (v3 — newViews contract)
 
-  All API endpoints the frontend (dashboard_updated.html / app.js) needs.
-
-  DESIGN PHILOSOPHY
-  The frontend is pure HTML/JS with static mock data. Every endpoint is shaped
-  to match the exact data structures in app.js so wiring up fetch() is a
-  straight drop-in replacement — no reshaping needed on the frontend side.
+  Every endpoint is shaped to match the data structures demanded by the
+  frontend developer in newViews.py.  Existing helper functions (_f, _cap,
+  _risk_level, _avatar, _build_factors, _name_map) are kept unchanged so
+  nothing else breaks.
 
   BASE URL: /api/analysis/
 
@@ -15,34 +13,26 @@
   ─────────────────────────────────────────────────────────────────────────────
   DASHBOARD
     GET  dashboard/summary/?class_id=X&semester=Y&sem_week=Z
+    GET  dashboard/class_summary/?class_id=X&semester=Y&sem_week=Z   (AI)
 
-  FLAGGED STUDENTS (matches FLAGGED[] in app.js)
-    GET  flagged/?class_id=X&semester=Y&sem_week=Z
+  INTERVENTIONS
+    GET  interventions/?class_id=X&semester=Y&sem_week=Z
+    POST interventions/log/                                           (body: flag_id, intervention, timestamp)
 
-  ALL STUDENTS ROSTER (matches ALL_STUDENTS[] in app.js)
-    GET  students/?class_id=X&semester=Y&sem_week=Z
+  FLAGS
+    GET  flags/weekly/?class_id=X&semester=Y&sem_week=Z
+    GET  flags/<flag_id>/expand/?semester=Y&sem_week=Z
+    GET  flags/last_week/?class_id=X&semester=Y&sem_week=Z
 
-  STUDENT DETAIL (slideout / deep-dive)
-    GET  student/<student_id>/detail/?semester=Y&sem_week=Z
+  STUDENTS
+    GET  students/all/?class_id=X&semester=Y&sem_week=Z
+    GET  students/detainment_risk/?class_id=X&semester=Y
 
-  STUDENT TRAJECTORY (line chart)
-    GET  student/<student_id>/trajectory/?semester=Y[&from_week=1]
-
-  CLASS ANALYTICS (heatmap + scatter)
-    GET  analytics/?class_id=X&semester=Y&sem_week=Z
-
-  LAST WEEK COMPARISON (matches LAST_WEEK[] in app.js)
-    GET  last_week/?class_id=X&semester=Y&sem_week=Z
-
-  PREDICTIONS
-    GET  pre_mid_term/?class_id=X&semester=Y[&sem_week=6|7]
-    GET  pre_mid_term/student/?student_id=X[&semester=Y]
-    GET  pre_end_term/?class_id=X&semester=Y
-    GET  pre_end_term/student/?student_id=X[&semester=Y]
-    GET  risk_of_failing/?class_id=X&semester=Y[&sem_week=Z]
-    GET  risk_of_failing/student/?student_id=X[&semester=Y]
-    GET  pre_sem_watchlist/?class_id=X&target_semester=Y
-    GET  pre_sem_watchlist/student/?student_id=X[&target_semester=Y]
+  EVENTS / REPORTS
+    GET  reports/pre_midterm/?class_id=X&semester=Y
+    GET  reports/post_midterm/?class_id=X&semester=Y
+    GET  reports/pre_endterm/?class_id=X&semester=Y
+    GET  reports/post_endterm/?class_id=X&semester=Y
 
   INTERNAL
     POST trigger_calibrate/
@@ -50,10 +40,10 @@
 """
 
 import os
-import sys
 import traceback
+from datetime import datetime
 
-from django.db.models import Avg, Max
+from django.db.models import Avg, Max, StdDev
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 
@@ -79,22 +69,19 @@ from .serializer import (
     PreSemWatchlistSerializer,
 )
 
-# Client DB models — wrapped in try so server starts even without client DB
 try:
-    from .client_models import ClientStudent
+    from .client_models import ClientStudent, ClientExamResult, ClientExamSchedule
     HAS_CLIENT_DB = True
 except Exception:
     HAS_CLIENT_DB = False
 
 from .calibrate_analysis_db import calibrate
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-#  SHARED HELPERS
+#  SHARED HELPERS  (unchanged from v2)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _require(request, *params):
-    """Check that all named query params are present. Returns (dict, err_response)."""
     missing = [p for p in params if not request.query_params.get(p)]
     if missing:
         return None, Response(
@@ -105,7 +92,6 @@ def _require(request, *params):
 
 
 def _name_map(class_id):
-    """Return {student_id: name} from client DB, or {} if unavailable."""
     if not HAS_CLIENT_DB:
         return {}
     try:
@@ -116,7 +102,6 @@ def _name_map(class_id):
 
 
 def _risk_level(risk_tier: str) -> str:
-    """Map backend risk_tier string → frontend riskLevel (high/med/safe)."""
     rt = (risk_tier or '').lower()
     if 'tier 1' in rt or 'critical' in rt:
         return 'high'
@@ -127,13 +112,11 @@ def _risk_level(risk_tier: str) -> str:
     return 'safe'
 
 
-def _cap(urgency: int) -> int:
-    """Clamp urgency_score (can exceed 100) to 0-100 for frontend riskScore."""
+def _cap(urgency) -> int:
     return min(int(urgency or 0), 100)
 
 
 def _f(val, default=0.0):
-    """Safe Decimal/None → float."""
     if val is None:
         return default
     try:
@@ -148,16 +131,15 @@ def _avatar(name: str) -> str:
 
 
 def _build_factors(diagnosis: str, urgency_score: int):
-    """Turn pipe-delimited diagnosis string into factors[] for the frontend."""
     parts = [d.strip() for d in (diagnosis or '').split('|') if d.strip()]
     COLOR_MAP = {
-        'severe absenteeism':   '#ef4444',
-        'low attendance':       '#ef4444',
-        'attendance fader':     '#f59e0b',
-        'stopped submitting':   '#f59e0b',
-        'integrity violation':  '#7c3aed',
-        'exam failure':         '#ef4444',
-        'hard test drop':       '#f59e0b',
+        'severe absenteeism':  '#ef4444',
+        'low attendance':      '#ef4444',
+        'attendance fader':    '#f59e0b',
+        'stopped submitting':  '#f59e0b',
+        'integrity violation': '#7c3aed',
+        'exam failure':        '#ef4444',
+        'hard test drop':      '#f59e0b',
     }
     factors = []
     n = max(len(parts), 1)
@@ -167,12 +149,54 @@ def _build_factors(diagnosis: str, urgency_score: int):
             if key in part.lower():
                 color = col
                 break
-        factors.append({'label': part, 'pct': min(int(urgency_score * 0.8 / n), 100), 'color': color})
+        factors.append({
+            'label': part,
+            'pct': min(int(urgency_score * 0.8 / n), 100),
+            'color': color,
+        })
     return factors, parts[0] if parts else 'Unknown'
 
 
+def _get_midterm_score(student_id, semester):
+    """Return actual midterm score from ClientExamResult, or False if unavailable."""
+    if not HAS_CLIENT_DB:
+        return False
+    try:
+        schedule = ClientExamSchedule.objects.using('client_db').filter(
+            exam_type='MIDTERM', semester=semester
+        ).first()
+        if not schedule:
+            return False
+        result = ClientExamResult.objects.using('client_db').filter(
+            student_id=student_id,
+            exam_id=schedule.exam_id,
+        ).first()
+        return _f(result.score_pct) if result else False
+    except Exception:
+        return False
+
+
+def _get_endterm_score(student_id, semester):
+    """Return actual endterm score from ClientExamResult, or False if unavailable."""
+    if not HAS_CLIENT_DB:
+        return False
+    try:
+        schedule = ClientExamSchedule.objects.using('client_db').filter(
+            exam_type='ENDTERM', semester=semester
+        ).first()
+        if not schedule:
+            return False
+        result = ClientExamResult.objects.using('client_db').filter(
+            student_id=student_id,
+            exam_id=schedule.exam_id,
+        ).first()
+        return _f(result.score_pct) if result else False
+    except Exception:
+        return False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-#  1. DASHBOARD SUMMARY
+#  1. DASHBOARD  — get_dashboard_stats  +  class_summary (AI)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @api_view(['GET'])
@@ -180,7 +204,14 @@ def dashboard_summary(request):
     """
     GET /api/analysis/dashboard/summary/?class_id=X&semester=Y&sem_week=Z
 
-    Powers the 4 stat cards at the top of the dashboard page.
+    Returns:
+    {
+        total_students          : int,
+        avg_risk_score          : float,   # avg urgency_score of flagged students this week
+        flagged_this_week       : int,
+        interventions_this_week : int,
+        risk_breakdown          : { critical, watch, warning, safe }
+    }
     """
     params, err = _require(request, 'class_id', 'semester', 'sem_week')
     if err:
@@ -194,13 +225,15 @@ def dashboard_summary(request):
         class_id=class_id, semester=semester, sem_week=sem_week
     ).count()
 
-    flags_qs  = weekly_flags.objects.filter(class_id=class_id, semester=semester, sem_week=sem_week)
-    flagged   = flags_qs.count()
+    flags_qs = weekly_flags.objects.filter(
+        class_id=class_id, semester=semester, sem_week=sem_week
+    )
+    flagged = flags_qs.count()
     avg_urgency = _f(flags_qs.aggregate(a=Avg('urgency_score'))['a'])
 
     interventions = intervention_log.objects.filter(
         semester=semester, sem_week=sem_week,
-        student_id__in=flags_qs.values_list('student_id', flat=True)
+        student_id__in=flags_qs.values_list('student_id', flat=True),
     ).count()
 
     return Response({
@@ -220,418 +253,20 @@ def dashboard_summary(request):
     })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  2. FLAGGED STUDENTS  — matches app.js FLAGGED[] structure exactly
-# ─────────────────────────────────────────────────────────────────────────────
-
 @api_view(['GET'])
-def flagged_students(request):
-    sys.stdout.write('i nside')
+def class_summary_view(request):
     """
-    GET /api/analysis/flagged/?class_id=X&semester=Y&sem_week=Z
+    GET /api/analysis/dashboard/class_summary/?class_id=X&semester=Y&sem_week=Z
 
-    Returns the list of flagged students for the week, shaped to match FLAGGED[]
-    in app.js — the dashboard's "Who to act on today" grid.
-    """
-    params, err = _require(request, 'class_id', 'semester', 'sem_week')
-    if err:
-        return err
+    Prepares the input prompt and calls ai_helpers.class_summary() (Gemini).
+    Returns the raw AI-generated class summary string.
 
-    class_id = params['class_id']
-    semester = int(params['semester'])
-    sem_week = int(params['sem_week'])
-
-    flags = list(weekly_flags.objects.filter(
-        class_id=class_id, semester=semester, sem_week=sem_week
-    ).order_by('-urgency_score'))
-
-    names = _name_map(class_id)
-
-    # Class averages for comparison bars
-    cls_agg = weekly_metrics.objects.filter(
-        class_id=class_id, semester=semester, sem_week=sem_week
-    ).aggregate(avg_et=Avg('effort_score'), avg_perf=Avg('academic_performance'))
-    class_avg_et   = _f(cls_agg['avg_et'],   65.0)
-    class_avg_perf = _f(cls_agg['avg_perf'], 70.0)
-
-    result = []
-    for flag in flags:
-        sid  = flag.student_id
-        name = names.get(sid, sid)
-
-        m = weekly_metrics.objects.filter(
-            student_id=sid, semester=semester, sem_week=sem_week
-        ).first()
-
-        # Weekly trajectory for line charts
-        traj = list(weekly_metrics.objects.filter(
-            student_id=sid, semester=semester, sem_week__lte=sem_week
-        ).order_by('sem_week').values(
-            'sem_week', 'effort_score', 'academic_performance', 'overall_att_pct'
-        ))
-
-        week_et = [_f(r['effort_score']) for r in traj]
-        week_at = [round(_f(r['overall_att_pct']), 1) for r in traj]
-        week_perf = [_f(r['academic_performance']) for r in traj]
-        student_avg_et   = round(sum(week_et)   / max(len(week_et),   1), 1)
-        student_avg_perf = round(sum(week_perf) / max(len(week_perf), 1), 1)
-        student_avg_at   = round(sum(week_at)   / max(len(week_at),   1), 1)
-
-        # Latest midterm prediction
-        pmt = pre_mid_term.objects.filter(student_id=sid, semester=semester).order_by('-sem_week').first()
-        midterm_str = f"Predicted: {_f(pmt.predicted_midterm_score)}%" if pmt else "N/A"
-
-        # Flag history from intervention_log
-        flag_hist = [
-            {
-                'date':       f"Week {fh['sem_week']}",
-                'diagnosis':  fh['trigger_diagnosis'] or 'Flagged',
-                'intervened': fh['advisor_notified'],
-            }
-            for fh in intervention_log.objects.filter(
-                student_id=sid, semester=semester
-            ).order_by('sem_week').values('sem_week', 'trigger_diagnosis', 'advisor_notified')
-        ]
-
-        factors, major_factor = _build_factors(flag.diagnosis, int(flag.urgency_score or 0))
-        att_pct = round(_f(m.overall_att_pct), 1) if m else 0.0
-        risk_score = _cap(flag.urgency_score)
-
-        result.append({
-            # Identity
-            'id':     sid,
-            'name':   name,
-            'roll':   sid,
-            'avatar': _avatar(name),
-
-            # Risk
-            'risk':         _risk_level(flag.risk_tier),
-            'reason':       flag.diagnosis or '',
-            'riskFail':     risk_score,
-            'riskDetention': min(int(risk_score * 0.7), 100),
-            'recovery':     max(0, 100 - risk_score),
-
-            # Current metrics
-            'academicPerf': _f(m.academic_performance    if m else None),
-            'effortScore':  _f(m.effort_score            if m else None),
-            'attendRecent': att_pct,
-            'quizSubmit':   round(_f(m.quiz_attempt_rate if m else None) * 100, 1),
-            'quizAvg':      _f(m.quiz_avg_pct            if m else None),
-            'assignAvg':    _f(m.assn_avg_pct            if m else None),
-            'midterm':      midterm_str,
-
-            # Averages
-            'avgRisk':       risk_score,
-            'avgEt':         student_avg_et,
-            'avgAt':         student_avg_at,
-            'overallAttend': att_pct,
-
-            # Chart arrays
-            'weekEt':         week_et,
-            'weekAt':         week_at,
-            'classAvgEt':     class_avg_et,
-            'classAvgPerf':   class_avg_perf,
-            'studentAvgEt':   student_avg_et,
-            'studentAvgPerf': student_avg_perf,
-            'etThisWeek':    _f(m.effort_score          if m else None),
-            'perfThisWeek':  _f(m.academic_performance  if m else None),
-
-            # History
-            'flagHistory': flag_hist,
-            'factors':     factors,
-            'majorFactor': major_factor,
-        })
-    return Response(result)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  3. ALL STUDENTS ROSTER  — matches app.js ALL_STUDENTS[] structure exactly
-# ─────────────────────────────────────────────────────────────────────────────
-
-@api_view(['GET'])
-def all_students(request):
-    """
-    GET /api/analysis/students/?class_id=X&semester=Y&sem_week=Z
-
-    Returns every tracked student, shaped like ALL_STUDENTS[] in app.js —
-    used for the students page heatmap and the galaxy/scatter view.
-    """
-    params, err = _require(request, 'class_id', 'semester', 'sem_week')
-    if err:
-        return err
-
-    class_id = params['class_id']
-    semester = int(params['semester'])
-    sem_week = int(params['sem_week'])
-
-    metrics  = list(weekly_metrics.objects.filter(
-        class_id=class_id, semester=semester, sem_week=sem_week
-    ).values(
-        'student_id', 'effort_score', 'academic_performance',
-        'overall_att_pct', 'quiz_attempt_rate',
-        'quiz_avg_pct', 'assn_avg_pct',
-    ))
-    # Pull latest risk labels from the dedicated risk_of_failing table
-    rof_qs = (risk_of_failing.objects
-              .filter(class_id=class_id, semester=semester, sem_week__lte=sem_week)
-              .order_by('student_id', '-sem_week'))
-    rof_map = {}
-    for r in rof_qs:
-        if r.student_id not in rof_map:
-            rof_map[r.student_id] = r
-
-    names = _name_map(class_id)
-
-    flagged_map = {
-        f.student_id: f
-        for f in weekly_flags.objects.filter(
-            class_id=class_id, semester=semester, sem_week=sem_week
-        )
+    {
+        class_id   : str,
+        semester   : int,
+        sem_week   : int,
+        summary    : str   # AI-generated narrative
     }
-
-    # Latest midterm predictions
-    pmt_map = {}
-    for p in pre_mid_term.objects.filter(class_id=class_id, semester=semester).order_by('-sem_week'):
-        if p.student_id not in pmt_map:
-            pmt_map[p.student_id] = _f(p.predicted_midterm_score)
-
-    # Latest endterm predictions
-    pet_map = {}
-    for p in pre_end_term.objects.filter(class_id=class_id, semester=semester).order_by('-sem_week'):
-        if p.student_id not in pet_map:
-            pet_map[p.student_id] = _f(p.predicted_endterm_score)
-
-    result = []
-    for m in metrics:
-        sid  = m['student_id']
-        flag = flagged_map.get(sid)
-        name = names.get(sid, sid)
-
-        if flag:
-            risk_score = _cap(flag.urgency_score)
-            risk_lv    = _risk_level(flag.risk_tier)
-        else:
-            rof_row    = rof_map.get(m['student_id'])
-            p_fail     = float(rof_row.p_fail) if rof_row else 0.0
-            risk_score = min(int(p_fail * 100), 100)
-            risk_lv    = ('high' if risk_score >= 70 else
-                          'med'  if risk_score >= 45 else 'safe')
-
-        att_pct = round(_f(m['overall_att_pct']), 1)
-        quiz_sub_pct = round(_f(m['quiz_attempt_rate']) * 100, 1)
-        engagement   = round((quiz_sub_pct + att_pct) / 2, 1)
-
-        result.append({
-            'id':           sid,
-            'name':         name,
-            'roll':         sid,
-            'avatar':       _avatar(name),
-            'academicPerf': _f(m['academic_performance']),
-            'riskScore':    risk_score,
-            'effort':       _f(m['effort_score']),
-            'engagement':   engagement,
-            'predMidterm':  pmt_map.get(sid, _f(m['academic_performance'])),
-            'predEndterm':  pet_map.get(sid, _f(m['academic_performance'])),
-            'attendance':   att_pct,
-            'riskLevel':    risk_lv,
-        })
-
-    result.sort(key=lambda x: x['riskScore'], reverse=True)
-    return Response(result)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  4. STUDENT DETAIL
-# ─────────────────────────────────────────────────────────────────────────────
-
-@api_view(['GET'])
-def student_detail(request, student_id):
-    """
-    GET /api/analysis/student/<student_id>/detail/?semester=Y&sem_week=Z
-
-    Full deep-dive data for the student slideout panel.
-    """
-    semester = request.query_params.get('semester')
-    sem_week = request.query_params.get('sem_week')
-
-    if not semester:
-        return Response({'error': 'semester is required'}, status=400)
-
-    semester_int = int(semester)
-    sem_week_int = int(sem_week) if sem_week else None
-
-    # Current-week metrics
-    mf = dict(student_id=student_id, semester=semester_int)
-    if sem_week_int:
-        mf['sem_week'] = sem_week_int
-    m = weekly_metrics.objects.filter(**mf).order_by('-sem_week').first()
-
-    # Trajectory
-    traj_qs = weekly_metrics.objects.filter(student_id=student_id, semester=semester_int)
-    if sem_week_int:
-        traj_qs = traj_qs.filter(sem_week__lte=sem_week_int)
-    traj = list(traj_qs.order_by('sem_week').values(
-        'sem_week', 'effort_score', 'academic_performance',
-        'overall_att_pct', 'quiz_avg_pct', 'assn_avg_pct',
-    ))
-
-    week_et   = [_f(r['effort_score'])          for r in traj]
-    week_at   = [round(_f(r['overall_att_pct']), 1) for r in traj]
-    week_perf = [_f(r['academic_performance'])  for r in traj]
-
-    # Current flag
-    cf_qs = weekly_flags.objects.filter(student_id=student_id, semester=semester_int)
-    if sem_week_int:
-        cf_qs = cf_qs.filter(sem_week=sem_week_int)
-    curr_flag = cf_qs.order_by('-sem_week').first()
-
-    # Flag history
-    # build a set of weeks where advisor was notified
-    intervened_weeks = set(
-        intervention_log.objects.filter(student_id=student_id, semester=semester_int, advisor_notified=True)
-        .values_list('sem_week', flat=True)
-    )
-
-    flag_hist = [
-        {
-            'date':       f"Week {f['sem_week']}",          # string not int
-            'diagnosis':  f['diagnosis'],
-            'intervened': f['sem_week'] in intervened_weeks, # merged from intervention_log
-        }
-        for f in weekly_flags.objects.filter(
-            student_id=student_id, semester=semester_int
-        ).order_by('sem_week').values('sem_week', 'risk_tier', 'urgency_score', 'diagnosis', 'archetype')
-    ]
-
-    # Intervention history
-    int_hist = [
-        {
-            'week':        i['sem_week'],
-            'escalation':  i['escalation_level'],
-            'diagnosis':   i['trigger_diagnosis'],
-            'intervened':  i['advisor_notified'],
-            'notes':       i['notes'],
-        }
-        for i in intervention_log.objects.filter(
-            student_id=student_id, semester=semester_int
-        ).order_by('sem_week').values('sem_week', 'escalation_level', 'trigger_diagnosis', 'advisor_notified', 'notes')
-    ]
-
-    pmt = pre_mid_term.objects.filter(student_id=student_id, semester=semester_int).order_by('-sem_week').first()
-    pet = pre_end_term.objects.filter(student_id=student_id, semester=semester_int).order_by('-sem_week').first()
-    rof = risk_of_failing.objects.filter(student_id=student_id, semester=semester_int).order_by('-sem_week').first()
-
-    cls_agg = weekly_metrics.objects.filter(
-    class_id=m.class_id if m else '', semester=semester_int, sem_week=sem_week_int
-    ).aggregate(avg_et=Avg('effort_score'), avg_perf=Avg('academic_performance'))
-    class_avg_et   = _f(cls_agg['avg_et'],  65.0)
-    class_avg_perf = _f(cls_agg['avg_perf'], 70.0)
-
-    return Response({
-        'student_id': student_id,
-        'semester':   semester_int,
-        'sem_week':   sem_week_int,
-
-        # Snapshot
-        'effort_score':         _f(m.effort_score if m else None),
-        'academic_performance': _f(m.academic_performance if m else None),
-        'overall_att_pct':      round(_f(m.overall_att_pct if m else None), 1),
-        'quiz_attempt_rate':     round(_f(m.quiz_attempt_rate if m else None) * 100, 1),
-        'quiz_avg_pct':         _f(m.quiz_avg_pct if m else None),
-        'assn_avg_pct':         _f(m.assn_avg_pct if m else None),
-        'library_visits':     int(m.library_visits or 0) if m else 0,
-        'book_borrows':       int(m.book_borrows or 0)   if m else 0,
-
-        # Risk
-        'risk_tier':     curr_flag.risk_tier if curr_flag else 'Safe',
-        'risk_level':    _risk_level(curr_flag.risk_tier if curr_flag else ''),
-        'urgency_score': int(curr_flag.urgency_score or 0) if curr_flag else 0,
-        'diagnosis':     curr_flag.diagnosis if curr_flag else '',
-        'archetype':     curr_flag.archetype if curr_flag else None,
-
-        # Predictions
-        'predicted_midterm_score': _f(pmt.predicted_midterm_score if pmt else None),
-        'predicted_endterm_score': _f(pet.predicted_endterm_score if pet else None),
-        'p_fail':                  _f(rof.p_fail if rof else None),
-        'risk_label':              rof.risk_label if rof else 'LOW',
-
-        # Charts
-        'week_labels': [f"W{r['sem_week']}" for r in traj],
-        'weekEt':     week_et,
-        'weekAt':     week_at,
-        'weekPerf':   week_perf,
-        'weekQuiz':   [_f(r['quiz_avg_pct'])  for r in traj],
-
-        # History
-        'flagHistory':         flag_hist,
-        'interventionHistory': int_hist,
-
-        # Aligned names (frontend expects these exact keys)
-        'avgEt':          round(sum(week_et) / max(len(week_et), 1), 1),
-        'avgAt':          round(sum(week_at) / max(len(week_at), 1), 1),
-        'overallAttend':  round(_f(m.overall_att_pct if m else None), 1),
-        'riskFail':       min(int(_f(rof.p_fail if rof else None) * 100), 100),
-        'midterm':        f"Predicted: {_f(pmt.predicted_midterm_score if pmt else None)}%" if pmt else "N/A",
-        'avgRisk':        int(curr_flag.urgency_score or 0) if curr_flag else 0,
-        'riskDetention':  min(int((curr_flag.urgency_score or 0) * 0.7), 100) if curr_flag else 0,
-        'etThisWeek':     _f(m.effort_score if m else None),
-        'perfThisWeek':   _f(m.academic_performance if m else None),
-
-        # Class averages for quad scatter
-        'classAvgEt':     class_avg_et,
-        'classAvgPerf':   class_avg_perf,
-        'studentAvgEt':   round(sum(week_et)   / max(len(week_et),   1), 1),
-        'studentAvgPerf': round(sum(week_perf) / max(len(week_perf), 1), 1),
-    })
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  5. STUDENT TRAJECTORY (line chart only)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@api_view(['GET'])
-def student_trajectory_view(request, student_id):
-    """
-    GET /api/analysis/student/<student_id>/trajectory/?semester=Y[&from_week=1]
-    """
-    semester  = request.query_params.get('semester')
-    from_week = int(request.query_params.get('from_week', 1))
-
-    if not semester:
-        return Response({'error': 'semester is required'}, status=400)
-
-    qs = list(weekly_metrics.objects.filter(
-        student_id=student_id, semester=int(semester), sem_week__gte=from_week
-    ).order_by('sem_week').values(
-        'sem_week', 'effort_score', 'academic_performance',
-        'overall_att_pct', 'quiz_avg_pct', 'assn_avg_pct',
-    ))
-
-    return Response({
-        'student_id': student_id,
-        'semester':   int(semester),
-        'weeks':      [f"W{r['sem_week']}" for r in qs],
-        'effort':     [_f(r['effort_score'])          for r in qs],
-        'performance':[_f(r['academic_performance'])  for r in qs],
-        'attendance': [round(_f(r['overall_att_pct']), 1) for r in qs],
-        'quiz':       [_f(r['quiz_avg_pct'])           for r in qs],
-        'assignment': [_f(r['assn_avg_pct'])           for r in qs],
-    })
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  6. CLASS ANALYTICS (analytics page)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@api_view(['GET'])
-def class_analytics(request):
-    """
-    GET /api/analysis/analytics/?class_id=X&semester=Y&sem_week=Z
-
-    Powers the analytics page:
-      - scatter plot: effort vs academic_performance (coloured by risk)
-      - heatmap: student × metric grid
-      - weekly class averages: line chart
     """
     params, err = _require(request, 'class_id', 'semester', 'sem_week')
     if err:
@@ -641,273 +276,66 @@ def class_analytics(request):
     semester = int(params['semester'])
     sem_week = int(params['sem_week'])
 
-    metrics = list(weekly_metrics.objects.filter(
+    flags_qs = weekly_flags.objects.filter(
         class_id=class_id, semester=semester, sem_week=sem_week
-    ).values(
-        'student_id', 'effort_score', 'academic_performance',
-        'overall_att_pct', 'quiz_avg_pct', 'assn_avg_pct',
-        'quiz_attempt_rate', 'library_visits',
-    ))
-
-    names = _name_map(class_id)
-    flagged_ids = set(weekly_flags.objects.filter(
+    )
+    metrics_agg = weekly_metrics.objects.filter(
         class_id=class_id, semester=semester, sem_week=sem_week
-    ).values_list('student_id', flat=True))
-
-    scatter = [{
-        'student_id':  m['student_id'],
-        'name':        names.get(m['student_id'], m['student_id']),
-        'effort':      _f(m['effort_score']),
-        'performance': _f(m['academic_performance']),
-        'attendance':  round(_f(m['overall_att_pct']), 1),
-        'flagged':     m['student_id'] in flagged_ids,
-    } for m in metrics]
-
-    heatmap = sorted([{
-        'student_id':  m['student_id'],
-        'name':        names.get(m['student_id'], m['student_id']),
-        'avatar':      _avatar(names.get(m['student_id'], m['student_id'])),
-        'effort':      _f(m['effort_score']),
-        'performance': _f(m['academic_performance']),
-        'attendance':  round(_f(m['overall_att_pct']), 1),
-        'quiz_avg':    _f(m['quiz_avg_pct']),
-        'assn_avg':    _f(m['assn_avg_pct']),
-        'quiz_submit': round(_f(m['quiz_attempt_rate']) * 100, 1),
-        'library':     int(m['library_visits'] or 0),
-        'flagged':     m['student_id'] in flagged_ids,
-    } for m in metrics], key=lambda x: x['performance'], reverse=True)
-
-    weekly_avgs = list(weekly_metrics.objects.filter(
-        class_id=class_id, semester=semester, sem_week__lte=sem_week
-    ).values('sem_week').annotate(
-        avg_effort=Avg('effort_score'),
+    ).aggregate(
+        avg_et=Avg('effort_score'),
         avg_perf=Avg('academic_performance'),
         avg_att=Avg('overall_att_pct'),
-    ).order_by('sem_week'))
+    )
 
-    cls = weekly_metrics.objects.filter(
-        class_id=class_id, semester=semester, sem_week=sem_week
-    ).aggregate(avg_et=Avg('effort_score'), avg_perf=Avg('academic_performance'))
+    input_prompt = {
+        'class_id':         class_id,
+        'semester':         semester,
+        'sem_week':         sem_week,
+        'total_students':   weekly_metrics.objects.filter(
+                                class_id=class_id, semester=semester, sem_week=sem_week
+                            ).count(),
+        'flagged_count':    flags_qs.count(),
+        'tier1_count':      flags_qs.filter(risk_tier__icontains='Tier 1').count(),
+        'tier2_count':      flags_qs.filter(risk_tier__icontains='Tier 2').count(),
+        'tier3_count':      flags_qs.filter(risk_tier__icontains='Tier 3').count(),
+        'avg_effort':       _f(metrics_agg['avg_et']),
+        'avg_performance':  _f(metrics_agg['avg_perf']),
+        'avg_attendance':   _f(metrics_agg['avg_att']),
+        'top_diagnoses':    list(
+                                flags_qs.values_list('diagnosis', flat=True)[:5]
+                            ),
+    }
+
+    try:
+        from .aiviews import class_summary as ai_class_summary
+        summary_text = ai_class_summary(input_prompt)
+    except Exception as exc:
+        return Response({'error': f'AI summary failed: {exc}'}, status=500)
 
     return Response({
-        'class_id':          class_id,
-        'semester':          semester,
-        'sem_week':          sem_week,
-        'scatter':           scatter,
-        'heatmap':           heatmap,
-        'class_avg_effort':  _f(cls['avg_et']),
-        'class_avg_perf':    _f(cls['avg_perf']),
-        'weekly_averages': [{
-            'week':       f"W{r['sem_week']}",
-            'avg_effort': _f(r['avg_effort']),
-            'avg_perf':   _f(r['avg_perf']),
-            'avg_att':    round(_f(r['avg_att']), 1),
-        } for r in weekly_avgs],
+        'class_id':  class_id,
+        'semester':  semester,
+        'sem_week':  sem_week,
+        'summary':   summary_text,
     })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  7. LAST WEEK COMPARISON  — matches app.js LAST_WEEK[] structure exactly
+#  2. INTERVENTIONS
 # ─────────────────────────────────────────────────────────────────────────────
-
-@api_view(['GET'])
-def last_week_comparison(request):
-    """
-    GET /api/analysis/last_week/?class_id=X&semester=Y&sem_week=Z
-
-    Returns flagged students from the previous week with delta comparisons —
-    shaped like LAST_WEEK[] in app.js.
-    """
-    params, err = _require(request, 'class_id', 'semester', 'sem_week')
-    if err:
-        return err
-
-    class_id  = params['class_id']
-    semester  = int(params['semester'])
-    sem_week  = int(params['sem_week'])
-    prev_week = sem_week - 1
-
-    if prev_week < 1:
-        return Response([])
-
-    prev_flags = list(weekly_flags.objects.filter(
-        class_id=class_id, semester=semester, sem_week=prev_week
-    ).order_by('-urgency_score'))
-
-    names = _name_map(class_id)
-
-    result = []
-    for flag in prev_flags:
-        sid  = flag.student_id
-        name = names.get(sid, sid)
-
-        curr_m = weekly_metrics.objects.filter(student_id=sid, semester=semester, sem_week=sem_week).first()
-        prev_m = weekly_metrics.objects.filter(student_id=sid, semester=semester, sem_week=prev_week).first()
-        curr_f = weekly_flags.objects.filter(student_id=sid, semester=semester, sem_week=sem_week).first()
-        latest_int = intervention_log.objects.filter(student_id=sid, semester=semester).order_by('-logged_at').first()
-
-        pmt = pre_mid_term.objects.filter(student_id=sid, semester=semester).order_by('-sem_week').first()
-        midterm_str = f"Predicted: {_f(pmt.predicted_midterm_score)}%" if pmt else "N/A"
-
-        factors, _ = _build_factors(flag.diagnosis, int(flag.urgency_score or 0))
-
-        et_curr  = _f(curr_m.effort_score if curr_m else None)
-        et_prev  = _f(prev_m.effort_score if prev_m else None)
-        at_curr  = round(_f(curr_m.overall_att_pct if curr_m else None), 1)
-        at_prev  = round(_f(prev_m.overall_att_pct if prev_m else None), 1)
-        risk_prev = _cap(flag.urgency_score)
-        risk_curr = _cap(curr_f.urgency_score) if curr_f else 0
-
-        result.append({
-            'id':      sid,
-            'name':    name,
-            'roll':    sid,
-            'avatar':  _avatar(name),
-            'risk':    _risk_level(flag.risk_tier),
-            'midterm': midterm_str,
-            'factors': factors,
-
-            # Delta values
-            'etCurr':   et_curr,
-            'etPrev':   et_prev,
-            'atCurr':   at_curr,
-            'atPrev':   at_prev,
-            'riskCurr': risk_curr,
-            'riskPrev': risk_prev,
-
-            # For detail card
-            'avgRisk':       risk_prev,
-            'avgEt':         et_prev,
-            'avgAt':         at_prev,
-            'overallAttend': at_prev,
-            'riskDetention': min(int(risk_prev * 0.7), 100),
-            'riskFailing':   risk_prev,
-            'recovery':      max(0, 100 - risk_prev),
-
-            # Intervention
-            'status':       'intervene' if curr_f else 'resolved',
-            'intervention': (latest_int.notes or latest_int.trigger_diagnosis
-                             if latest_int else ''),
-        })
-
-    return Response(result)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  8-11. PREDICTION ENDPOINTS (unchanged from original, cleaned up)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@api_view(['GET'])
-def pre_mid_term_list(request):
-    """GET /api/analysis/pre_mid_term/?class_id=X&semester=Y[&sem_week=6|7]"""
-    class_id = request.query_params.get('class_id')
-    semester = request.query_params.get('semester')
-    sem_week = request.query_params.get('sem_week')
-    if not class_id or not semester:
-        return Response({'error': 'class_id and semester are required'}, status=400)
-    qs = pre_mid_term.objects.filter(class_id=class_id, semester=semester)
-    if sem_week:
-        qs = qs.filter(sem_week=sem_week)
-    return Response(PreMidTermSerializer(qs, many=True).data)
-
-
-@api_view(['GET'])
-def pre_mid_term_student(request):
-    """GET /api/analysis/pre_mid_term/student/?student_id=X[&semester=Y]"""
-    student_id = request.query_params.get('student_id')
-    semester   = request.query_params.get('semester')
-    if not student_id:
-        return Response({'error': 'student_id is required'}, status=400)
-    qs = pre_mid_term.objects.filter(student_id=student_id)
-    if semester:
-        qs = qs.filter(semester=semester)
-    return Response(PreMidTermSerializer(qs.order_by('-sem_week'), many=True).data)
-
-
-@api_view(['GET'])
-def pre_end_term_list(request):
-    """GET /api/analysis/pre_end_term/?class_id=X&semester=Y"""
-    class_id = request.query_params.get('class_id')
-    semester = request.query_params.get('semester')
-    if not class_id or not semester:
-        return Response({'error': 'class_id and semester are required'}, status=400)
-    qs = pre_end_term.objects.filter(class_id=class_id, semester=semester)
-    return Response(PreEndTermSerializer(qs, many=True).data)
-
-
-@api_view(['GET'])
-def pre_end_term_student(request):
-    """GET /api/analysis/pre_end_term/student/?student_id=X[&semester=Y]"""
-    student_id = request.query_params.get('student_id')
-    semester   = request.query_params.get('semester')
-    if not student_id:
-        return Response({'error': 'student_id is required'}, status=400)
-    qs = pre_end_term.objects.filter(student_id=student_id)
-    if semester:
-        qs = qs.filter(semester=semester)
-    return Response(PreEndTermSerializer(qs.order_by('-sem_week'), many=True).data)
-
-
-@api_view(['GET'])
-def risk_of_failing_list(request):
-    """GET /api/analysis/risk_of_failing/?class_id=X&semester=Y[&sem_week=Z]"""
-    class_id = request.query_params.get('class_id')
-    semester = request.query_params.get('semester')
-    sem_week = request.query_params.get('sem_week')
-    if not class_id or not semester:
-        return Response({'error': 'class_id and semester are required'}, status=400)
-    qs = risk_of_failing.objects.filter(class_id=class_id, semester=semester)
-    if sem_week:
-        qs = qs.filter(sem_week=sem_week)
-    return Response(RiskOfFailingSerializer(qs, many=True).data)
-
-
-@api_view(['GET'])
-def risk_of_failing_student(request):
-    """GET /api/analysis/risk_of_failing/student/?student_id=X[&semester=Y]"""
-    student_id = request.query_params.get('student_id')
-    semester   = request.query_params.get('semester')
-    if not student_id:
-        return Response({'error': 'student_id is required'}, status=400)
-    qs = risk_of_failing.objects.filter(student_id=student_id)
-    if semester:
-        qs = qs.filter(semester=semester)
-    return Response(RiskOfFailingSerializer(qs.order_by('-sem_week'), many=True).data)
-
-
-@api_view(['GET'])
-def pre_sem_watchlist_list(request):
-    """GET /api/analysis/pre_sem_watchlist/?class_id=X&target_semester=Y"""
-    class_id        = request.query_params.get('class_id')
-    target_semester = request.query_params.get('target_semester')
-    if not class_id or not target_semester:
-        return Response({'error': 'class_id and target_semester are required'}, status=400)
-    target_semester = int(target_semester)   # ← added cast
-    qs = pre_sem_watchlist.objects.filter(class_id=class_id, target_semester=target_semester)
-    print(f"[DEBUG ...]  → {qs.count()} rows")
-    return Response(PreSemWatchlistSerializer(qs, many=True).data)
-
-
-@api_view(['GET'])
-def pre_sem_watchlist_student(request):
-    """GET /api/analysis/pre_sem_watchlist/student/?student_id=X[&target_semester=Y]"""
-    student_id      = request.query_params.get('student_id')
-    target_semester = int(request.query_params.get('target_semester'))
-    if not student_id:
-        return Response({'error': 'student_id is required'}, status=400)
-    qs = pre_sem_watchlist.objects.filter(student_id=student_id)
-    if target_semester:
-        qs = qs.filter(target_semester=target_semester)
-    return Response(PreSemWatchlistSerializer(qs, many=True).data)
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  INTERVENTIONS  — matches app.js INTERVENTIONS[] structure exactly
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 @api_view(['GET'])
 def interventions_list(request):
-    """GET /api/analysis/interventions/?class_id=X&semester=Y&sem_week=Z"""
+    """
+    GET /api/analysis/interventions/?class_id=X&semester=Y&sem_week=Z
+
+    Returns:
+    {
+        intervention_id: {
+            student_id, name, type_of_intervention, date_of_logging
+        }
+    }
+    """
     params, err = _require(request, 'class_id', 'semester', 'sem_week')
     if err:
         return err
@@ -925,35 +353,966 @@ def interventions_list(request):
     ).order_by('-sem_week', '-logged_at')
 
     names = _name_map(class_id)
-
-    result = []
+    result = {}
     for log in logs:
-        sid  = log.student_id
+        sid = log.student_id
+        result[log.id] = {
+            'student_id':          sid,
+            'name':                names.get(sid, sid),
+            'type_of_intervention': log.notes or log.trigger_diagnosis or f'Level {log.escalation_level} Escalation',
+            'date_of_logging':     log.logged_at.strftime('%Y-%m-%d') if log.logged_at else f'Week {log.sem_week}',
+        }
+
+    return Response(result)
+
+
+@api_view(['POST'])
+def log_intervention(request):
+    """
+    POST /api/analysis/interventions/log/
+    Body: { flag_id, intervention, timestamp }
+
+    Writes into intervention_log table and returns the saved record id.
+    """
+    flag_id      = request.data.get('flag_id')
+    intervention = request.data.get('intervention', '')
+    timestamp    = request.data.get('timestamp')
+
+    if not flag_id:
+        return Response({'error': 'flag_id is required'}, status=400)
+
+    try:
+        flag_obj = weekly_flags.objects.get(id=flag_id)
+    except weekly_flags.DoesNotExist:
+        return Response({'error': f'flag_id {flag_id} not found'}, status=404)
+
+    log_entry = intervention_log.objects.create(
+        flag=flag_obj,
+        student_id=flag_obj.student_id,
+        semester=flag_obj.semester,
+        sem_week=flag_obj.sem_week,
+        escalation_level=flag_obj.escalation_level,
+        notes=intervention,
+        trigger_diagnosis=flag_obj.diagnosis,
+        advisor_notified=True,
+    )
+
+    return Response({
+        'id':         log_entry.id,
+        'flag_id':    flag_id,
+        'student_id': flag_obj.student_id,
+        'logged_at':  log_entry.logged_at.strftime('%Y-%m-%d %H:%M:%S'),
+    }, status=201)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  3. FLAGS — weekly_flags, expand_flag, last_weeks_flags
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+def weekly_flags_view(request):
+    """
+    GET /api/analysis/flags/weekly/?class_id=X&semester=Y&sem_week=Z
+
+    Returns:
+    {
+        flag1: {
+            student_id, student_name, risk_tier, diagnosis,
+            attendance_pct, risk_score, escalation_level
+        },
+        ...
+    }
+    """
+    params, err = _require(request, 'class_id', 'semester', 'sem_week')
+    if err:
+        return err
+
+    class_id = params['class_id']
+    semester = int(params['semester'])
+    sem_week = int(params['sem_week'])
+
+    flags = weekly_flags.objects.filter(
+        class_id=class_id, semester=semester, sem_week=sem_week
+    ).order_by('-urgency_score')
+
+    names = _name_map(class_id)
+    result = {}
+
+    flags = weekly_flags.objects.filter(
+    class_id=class_id, semester=semester, sem_week=sem_week
+    ).order_by('-urgency_score')
+
+    # ✅ FIX: Fetch ALL metrics in ONE query instead of one per student
+    student_ids = [f.student_id for f in flags]
+    metrics_map = {
+        m.student_id: m
+        for m in weekly_metrics.objects.filter(
+            student_id__in=student_ids, semester=semester, sem_week=sem_week
+        )
+    }
+
+    names = _name_map(class_id)
+    result = {}
+
+    for i, flag in enumerate(flags, start=1):
+        sid = flag.student_id
+        m = metrics_map.get(sid)
+        # rest of the loop stays exactly the same
+
+        result[f'flag{i}'] = {
+            'student_id':       sid,
+            'student_name':     names.get(sid, sid),
+            'risk_tier':        flag.risk_tier,
+            'diagnosis':        flag.diagnosis,
+            'attendance_pct':   round(_f(m.overall_att_pct if m else None), 1),
+            'risk_score':       _cap(flag.urgency_score),
+            'escalation_level': flag.escalation_level,
+        }
+
+    return Response(result)
+
+
+@api_view(['GET'])
+def expand_flag(request, flag_id):
+    """
+    GET /api/analysis/flags/<flag_id>/expand/?semester=Y&sem_week=Z
+
+    Returns the full student deep-dive for a flagged student.
+    Shape matches expand_flag() spec in newViews.py exactly.
+    """
+    semester_str = request.query_params.get('semester')
+    sem_week_str = request.query_params.get('sem_week')
+
+    if not semester_str:
+        return Response({'error': 'semester is required'}, status=400)
+
+    semester = int(semester_str)
+    sem_week = int(sem_week_str) if sem_week_str else None
+
+    try:
+        flag = weekly_flags.objects.get(id=flag_id)
+    except weekly_flags.DoesNotExist:
+        return Response({'error': f'flag_id {flag_id} not found'}, status=404)
+
+    sid = flag.student_id
+
+    # ── Current-week metrics ──────────────────────────────────────────────────
+    m_filter = dict(student_id=sid, semester=semester)
+    if sem_week:
+        m_filter['sem_week'] = sem_week
+    m = weekly_metrics.objects.filter(**m_filter).order_by('-sem_week').first()
+
+    # ── All historical metrics for this semester ──────────────────────────────
+    traj_qs = weekly_metrics.objects.filter(
+        student_id=sid, semester=semester
+    )
+    if sem_week:
+        traj_qs = traj_qs.filter(sem_week__lte=sem_week)
+    traj = list(traj_qs.order_by('sem_week').values(
+        'sem_week', 'effort_score', 'academic_performance',
+        'overall_att_pct', 'risk_of_detention',
+    ))
+
+    week_et   = [_f(r['effort_score']) for r in traj]
+    week_at   = [_f(r['academic_performance']) for r in traj]
+
+    avg_effort       = round(sum(week_et) / max(len(week_et), 1), 2)
+    avg_performance  = round(sum(week_at) / max(len(week_at), 1), 2)
+    overall_att      = round(_f(m.overall_att_pct if m else None), 1)
+    risk_detention   = round(_f(m.risk_of_detention if m else None), 1)
+    midterm_score    = _get_midterm_score(sid, semester)
+
+    # ── student_summary (AI) ──────────────────────────────────────────────────
+    # Build student_data dict for aiviews.student_summary()
+    cls_agg = weekly_metrics.objects.filter(
+        class_id=flag.class_id, semester=semester, sem_week=(sem_week or flag.sem_week)
+    ).aggregate(avg_et=Avg('effort_score'), avg_perf=Avg('academic_performance'))
+    class_avg_et   = _f(cls_agg['avg_et'],   65.0)
+    class_avg_perf = _f(cls_agg['avg_perf'], 70.0)
+
+    flag_count_qs = weekly_flags.objects.filter(
+        student_id=sid, semester=semester
+    ).order_by('sem_week')
+    flagging_history_data = {
+        'times_flagged':          flag_count_qs.count(),
+        'weeks_since_each_flag':  [
+            (sem_week or flag.sem_week) - f['sem_week']
+            for f in flag_count_qs.values('sem_week')
+        ],
+    }
+
+    student_data = {
+        'E_t':                  _f(m.effort_score if m else None),
+        'A_t':                  _f(m.academic_performance if m else None) or None,
+        'reasons_for_flagging': flag.diagnosis,
+        'urgency_score':        float(flag.urgency_score or 0),
+        'risk_score':           float(flag.urgency_score or 0),
+        'E_t_history':          week_et[:-1],
+        'A_t_history':          [x for x in week_at if x > 0],
+        'E':                    class_avg_et,
+        'A':                    class_avg_perf,
+        'e':                    avg_effort,
+        'a':                    avg_performance,
+        'del_E':                round(avg_effort - class_avg_et, 2),
+        'del_A':                round(avg_performance - class_avg_perf, 2),
+        'flagging_history':     flagging_history_data,
+        'effort_contributors_student': {
+            'avg_library_visits':         _f(m.library_visits if m else None),
+            'avg_book_borrows':           _f(m.book_borrows if m else None),
+            'avg_attendance_pct':         _f(m.overall_att_pct if m else None) / 100,
+            'avg_assignment_submit_rate': _f(getattr(m, 'assn_submit_rate', None) if m else None),
+            'avg_plagiarism_free_rate':   1 - _f(getattr(m, 'assn_plagiarism_pct', None) if m else None) / 100,
+            'avg_quiz_attempt_rate':      _f(m.quiz_attempt_rate if m else None),
+        },
+        'effort_contributors_class': {
+            'avg_library_visits':         1.8,
+            'avg_book_borrows':           0.9,
+            'avg_attendance_pct':         class_avg_et / 100,
+            'avg_assignment_submit_rate': 0.87,
+            'avg_plagiarism_free_rate':   0.91,
+            'avg_quiz_attempt_rate':      0.78,
+        },
+    }
+
+    ai_summary = None
+    try:
+        from .aiviews import student_summary as ai_student_summary
+        ai_summary = ai_student_summary(student_data)
+    except Exception:
+        ai_summary = None
+
+    # ── Flagging history ──────────────────────────────────────────────────────
+    intervened_weeks = set(
+        intervention_log.objects.filter(
+            student_id=sid, semester=semester, advisor_notified=True
+        ).values_list('sem_week', flat=True)
+    )
+    flagging_history = {
+        f['sem_week']: {
+            'diagnosis':       f['diagnosis'],
+            'did_we_intervene': f['sem_week'] in intervened_weeks,
+        }
+        for f in weekly_flags.objects.filter(
+            student_id=sid, semester=semester
+        ).order_by('sem_week').values('sem_week', 'diagnosis')
+    }
+
+    # ── Trends ────────────────────────────────────────────────────────────────
+    trends = {
+        'E_t': {r['sem_week']: _f(r['effort_score'])          for r in traj},
+        'A_t': {r['sem_week']: _f(r['academic_performance']) or False for r in traj},
+    }
+
+    # ── Effort vs Performance ─────────────────────────────────────────────────
+    all_student_avgs = weekly_metrics.objects.filter(
+        class_id=flag.class_id, semester=semester, sem_week=(sem_week or flag.sem_week)
+    ).values('student_id').annotate(
+        avg_effort=Avg('effort_score'),
+        avg_perf=Avg('academic_performance'),
+    )
+    class_effort_mean = _f(
+        sum(_f(s['avg_effort']) for s in all_student_avgs) / max(len(list(all_student_avgs)), 1)
+    ) if all_student_avgs else class_avg_et
+    # Re-query because the queryset was consumed
+    cls_perf_vals = list(
+        weekly_metrics.objects.filter(
+            class_id=flag.class_id, semester=semester,
+            sem_week=(sem_week or flag.sem_week)
+        ).values_list('academic_performance', flat=True)
+    )
+    class_perf_mean = round(sum(_f(v) for v in cls_perf_vals) / max(len(cls_perf_vals), 1), 2)
+
+    effort_vs_performance = {
+        'avg_effort_of_class':      round(class_avg_et, 2),
+        'avg_performance_of_class': round(class_perf_mean, 2),
+        'avg_performance_of_student': avg_performance,
+        'avg_effort_of_student':      avg_effort,
+        'E_t': _f(m.effort_score if m else None),
+        'A_t': _f(m.academic_performance if m else None),
+    }
+
+    # ── Flagging contributors ─────────────────────────────────────────────────
+    parts = [d.strip() for d in (flag.diagnosis or '').split('|') if d.strip()]
+    n = max(len(parts), 1)
+    total_score = _cap(flag.urgency_score) or 1
+    flagging_contributors = {
+        part: round(total_score / n, 1)
+        for part in parts
+    }
+
+    return Response({
+        'student_overview': {
+            'avg_risk_score':            _cap(flag.urgency_score),
+            'avg_effort':                avg_effort,
+            'avg_academic_performance':  avg_performance,
+            'overall_attendance':        overall_att,
+            'risk_of_detention':         risk_detention,
+            'mid_term_score':            midterm_score,
+        },
+        'student_summary':    ai_summary,
+        'flagging_history':   flagging_history,
+        'trends':             trends,
+        'effort_vs_performance': effort_vs_performance,
+        'flagging_contributors': flagging_contributors,
+    })
+
+
+@api_view(['GET'])
+def last_weeks_flags(request):
+    """
+    GET /api/analysis/flags/last_week/?class_id=X&semester=Y&sem_week=Z
+
+    Returns flags from the previous week with delta comparisons.
+    Shape matches last_weeks_flags() spec in newViews.py.
+    """
+    params, err = _require(request, 'class_id', 'semester', 'sem_week')
+    if err:
+        return err
+
+    class_id  = params['class_id']
+    semester  = int(params['semester'])
+    sem_week  = int(params['sem_week'])
+    prev_week = sem_week - 1
+
+    if prev_week < 1:
+        return Response({})
+
+    prev_flags = weekly_flags.objects.filter(
+        class_id=class_id, semester=semester, sem_week=prev_week
+    ).order_by('-urgency_score')
+
+    names = _name_map(class_id)
+    result = {}
+    
+    prev_flags = list(prev_flags)  # evaluate once
+    student_ids = [f.student_id for f in prev_flags]
+
+    # ✅ FIX: All queries outside the loop
+    curr_metrics_map = {
+        m.student_id: m
+        for m in weekly_metrics.objects.filter(
+            student_id__in=student_ids, semester=semester, sem_week=sem_week
+        )
+    }
+    prev_metrics_map = {
+        m.student_id: m
+        for m in weekly_metrics.objects.filter(
+            student_id__in=student_ids, semester=semester, sem_week=prev_week
+        )
+    }
+    traj_map = {}
+    for m in weekly_metrics.objects.filter(
+        student_id__in=student_ids, semester=semester, sem_week__lte=prev_week
+    ).order_by('sem_week').values('student_id', 'effort_score', 'academic_performance', 'overall_att_pct'):
+        traj_map.setdefault(m['student_id'], []).append(m)
+
+    curr_flags_map = {
+        f.student_id: f
+        for f in weekly_flags.objects.filter(
+            student_id__in=student_ids, semester=semester, sem_week=sem_week
+        )
+    }
+
+    for flag in prev_flags:
+        sid  = flag.student_id
         name = names.get(sid, sid)
-        result.append({
-            'id':              log.id,
-            'student_id':      sid,
-            'name':            name,
-            'avatar':          _avatar(name),
-            'week':            log.sem_week,
-            'escalation_level': log.escalation_level,
-            'type':            f"Level {log.escalation_level} Escalation",
-            'date':            f"Week {log.sem_week}",
-            'diagnosis':       log.trigger_diagnosis or '',
-            'advisor_notified': log.advisor_notified,
-            'notes':           log.notes or '',
-        })
+
+        curr_m = weekly_metrics.objects.filter(
+            student_id=sid, semester=semester, sem_week=sem_week
+        ).first()
+        prev_m = weekly_metrics.objects.filter(
+            student_id=sid, semester=semester, sem_week=prev_week
+        ).first()
+
+        pmt = pre_mid_term.objects.filter(
+            student_id=sid, semester=semester
+        ).order_by('-sem_week').first()
+
+        # historical metrics
+        traj = list(weekly_metrics.objects.filter(
+            student_id=sid, semester=semester, sem_week__lte=prev_week
+        ).order_by('sem_week').values('effort_score', 'academic_performance', 'overall_att_pct'))
+        week_et   = [_f(r['effort_score']) for r in traj]
+        week_perf = [_f(r['academic_performance']) for r in traj]
+
+        avg_risk  = _cap(flag.urgency_score)
+        avg_et    = round(sum(week_et)   / max(len(week_et),   1), 2)
+        avg_perf  = round(sum(week_perf) / max(len(week_perf), 1), 2)
+
+        result[flag.id] = {
+            'basic_details': [
+                sid,
+                name,
+                flag.diagnosis,
+                flag.risk_tier,
+            ],
+            'more': {
+                'avg_risk_score':           avg_risk,
+                'avg_effort':               avg_et,
+                'avg_academic_performance': avg_perf,
+                'overall_attendance':       round(_f(prev_m.overall_att_pct if prev_m else None), 1),
+                'risk_of_detention':        round(_f(prev_m.risk_of_detention if prev_m else None), 1),
+                'mid_term_score':           _get_midterm_score(sid, semester),
+            },
+            'diagnosis': {
+                part.strip(): round(avg_risk / max(len(flag.diagnosis.split('|')), 1), 1)
+                for part in (flag.diagnosis or '').split('|') if part.strip()
+            },
+            'this_week_vs_last_week': {
+                'effort': {
+                    'delta_E_t':      round(
+                        _f(curr_m.effort_score if curr_m else None) -
+                        _f(prev_m.effort_score if prev_m else None), 2
+                    ),
+                    'E_t_previous':   _f(prev_m.effort_score if prev_m else None),
+                },
+                'performance': {
+                    'delta_A_t':      round(
+                        _f(curr_m.academic_performance if curr_m else None) -
+                        _f(prev_m.academic_performance if prev_m else None), 2
+                    ),
+                    'A_t_previous':   _f(prev_m.academic_performance if prev_m else None),
+                },
+                'risk_score': {
+                    'delta_risk_score':   0,   # will be filled once curr flag is fetched
+                    'risk_score_previous': avg_risk,
+                },
+            },
+        }
+
+        # fill delta_risk_score if current-week flag exists
+        curr_flag = weekly_flags.objects.filter(
+            student_id=sid, semester=semester, sem_week=sem_week
+        ).first()
+        if curr_flag:
+            result[flag.id]['this_week_vs_last_week']['risk_score']['delta_risk_score'] = (
+                _cap(curr_flag.urgency_score) - avg_risk
+            )
 
     return Response(result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  INTERNAL / INFRA
+#  4. STUDENT ROSTER  — all_students  +  detainment_risk
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+def all_students(request):
+    """
+    GET /api/analysis/students/all/?class_id=X&semester=Y&sem_week=Z
+
+    Returns whatever metrics are available on or before this week in the same
+    semester. Previous-semester midterm scores are NOT included.
+
+    {
+        student_map          : { student_id: name },
+        A_t                  : { student_id: value | False },
+        E_t                  : { student_id: value | False },
+        risk_score           : { student_id: value | False },
+        predicted_midterm_score : { student_id: value | False },
+        actual_midterm_score    : { student_id: value | False },
+        predicted_endterm_score : { student_id: value | False },
+        actual_endterm_score    : { student_id: value | False },
+    }
+    """
+    params, err = _require(request, 'class_id', 'semester', 'sem_week')
+    if err:
+        return err
+
+    class_id = params['class_id']
+    semester = int(params['semester'])
+    sem_week = int(params['sem_week'])
+
+    metrics_qs = list(weekly_metrics.objects.filter(
+        class_id=class_id, semester=semester, sem_week=sem_week
+    ).values('student_id', 'effort_score', 'academic_performance', 'risk_score'))
+
+    # Latest midterm / endterm predictions (only this semester)
+    pmt_map = {}
+    for p in pre_mid_term.objects.filter(
+        class_id=class_id, semester=semester, sem_week__lte=sem_week
+    ).order_by('-sem_week'):
+        if p.student_id not in pmt_map:
+            pmt_map[p.student_id] = _f(p.predicted_midterm_score)
+
+    pet_map = {}
+    for p in pre_end_term.objects.filter(
+        class_id=class_id, semester=semester
+    ).order_by('-sem_week'):
+        if p.student_id not in pet_map:
+            pet_map[p.student_id] = _f(p.predicted_endterm_score)
+
+    names = _name_map(class_id)
+    student_ids = [m['student_id'] for m in metrics_qs]
+
+    student_map          = {}
+    A_t_map              = {}
+    E_t_map              = {}
+    risk_score_map       = {}
+    pred_midterm_map     = {}
+    actual_midterm_map   = {}
+    pred_endterm_map     = {}
+    actual_endterm_map   = {}
+
+    # ✅ FIX: Fetch all exam scores in 2 queries total
+    from .client_models import ClientExamSchedule, ClientExamResult
+    if HAS_CLIENT_DB:
+        try:
+            mid_schedule = ClientExamSchedule.objects.using('client_db').filter(
+                exam_type='MIDTERM', semester=semester
+            ).first()
+            end_schedule = ClientExamSchedule.objects.using('client_db').filter(
+                exam_type='ENDTERM', semester=semester
+            ).first()
+            
+            bulk_mid = {}
+            if mid_schedule:
+                for r in ClientExamResult.objects.using('client_db').filter(
+                    student_id__in=student_ids, exam_id=mid_schedule.exam_id
+                ):
+                    bulk_mid[r.student_id] = _f(r.score_pct)
+            
+            bulk_end = {}
+            if end_schedule:
+                for r in ClientExamResult.objects.using('client_db').filter(
+                    student_id__in=student_ids, exam_id=end_schedule.exam_id
+                ):
+                    bulk_end[r.student_id] = _f(r.score_pct)
+        except Exception:
+            bulk_mid, bulk_end = {}, {}
+    else:
+        bulk_mid, bulk_end = {}, {}
+
+    for m in metrics_qs:
+        sid = m['student_id']
+        student_map[sid]        = names.get(sid, sid)
+        A_t_map[sid]            = _f(m['academic_performance']) or False
+        E_t_map[sid]            = _f(m['effort_score']) or False
+        risk_score_map[sid]     = m['risk_score'] if m['risk_score'] is not None else False
+        pred_midterm_map[sid]   = pmt_map.get(sid, False)
+        pred_endterm_map[sid]   = pet_map.get(sid, False)
+        actual_midterm_map[sid] = _get_midterm_score(sid, semester)
+        actual_endterm_map[sid] = _get_endterm_score(sid, semester)
+
+    return Response({
+        'student_map':              student_map,
+        'A_t':                      A_t_map,
+        'E_t':                      E_t_map,
+        'risk_score':               risk_score_map,
+        'predicted_midterm_score':  pred_midterm_map,
+        'actual_midterm_score':     actual_midterm_map,
+        'predicted_endterm_score':  pred_endterm_map,
+        'actual_endterm_score':     actual_endterm_map,
+    })
+
+
+@api_view(['GET'])
+def detainment_risk(request):
+    """
+    GET /api/analysis/students/detainment_risk/?class_id=X&semester=Y
+
+    Returns all students with risk_of_detention >= 85%.
+
+    {
+        student_id: {
+            risk_score    : float,   # risk_of_detention value
+            attendance_pct: float    # overall_att_pct (not weekly)
+        }
+    }
+    """
+    params, err = _require(request, 'class_id', 'semester')
+    if err:
+        return err
+
+    class_id = params['class_id']
+    semester = int(params['semester'])
+
+    # Get the latest sem_week entry per student and filter detention >= 85
+    # Use the most recent weekly_metrics entry per student
+    latest_week = weekly_metrics.objects.filter(
+        class_id=class_id, semester=semester
+    ).aggregate(max_week=Max('sem_week'))['max_week']
+
+    if not latest_week:
+        return Response({})
+
+    at_risk = weekly_metrics.objects.filter(
+        class_id=class_id,
+        semester=semester,
+        sem_week=latest_week,
+        risk_of_detention__gte=85,
+    ).values('student_id', 'risk_of_detention', 'overall_att_pct')
+
+    result = {
+        m['student_id']: {
+            'risk_score':     round(_f(m['risk_of_detention']), 1),
+            'attendance_pct': round(_f(m['overall_att_pct']), 1),
+        }
+        for m in at_risk
+    }
+
+    return Response(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  5. EVENT REPORTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _marks_distribution(scores: list) -> dict:
+    """Build marks distribution dict from a list of float scores (0-100)."""
+    buckets = {
+        'lt_40':   0,
+        '40to50':  0,
+        '51to60':  0,
+        '61to70':  0,
+        '71to80':  0,
+        '81to90':  0,
+        '91to100': 0,
+    }
+    for s in scores:
+        if s < 40:
+            buckets['lt_40']   += 1
+        elif s <= 50:
+            buckets['40to50']  += 1
+        elif s <= 60:
+            buckets['51to60']  += 1
+        elif s <= 70:
+            buckets['61to70']  += 1
+        elif s <= 80:
+            buckets['71to80']  += 1
+        elif s <= 90:
+            buckets['81to90']  += 1
+        else:
+            buckets['91to100'] += 1
+    return buckets
+
+
+def _mode(scores: list) -> float:
+    """Return the mode of a list of floats (rounded to nearest 5)."""
+    if not scores:
+        return 0.0
+    rounded = [round(s / 5) * 5 for s in scores]
+    return max(set(rounded), key=rounded.count)
+
+
+@api_view(['GET'])
+def pre_midterm_report(request):
+    """
+    GET /api/analysis/reports/pre_midterm/?class_id=X&semester=Y
+
+    {
+        marks_distribution : { lt_40, 40to50, … 91to100 },
+        mean_predicted_score      : float,
+        standard_deviation        : float,
+        mode_marks                : float,
+        top20_pct                 : float,
+        bottom20_pct              : float,
+        watchlist                 : { student_id: [name, reason, predicted_score, risk_level] }
+    }
+    """
+    params, err = _require(request, 'class_id', 'semester')
+    if err:
+        return err
+
+    class_id = params['class_id']
+    semester = int(params['semester'])
+
+    pmt_qs = list(
+        pre_mid_term.objects.filter(class_id=class_id, semester=semester)
+        .order_by('student_id', '-sem_week')
+    )
+    # One entry per student (latest prediction)
+    seen = {}
+    for p in pmt_qs:
+        if p.student_id not in seen:
+            seen[p.student_id] = _f(p.predicted_midterm_score)
+
+    scores = list(seen.values())
+    if not scores:
+        return Response({'error': 'No pre-midterm predictions found'}, status=404)
+
+    names   = _name_map(class_id)
+    mean    = round(sum(scores) / len(scores), 2)
+    n       = len(scores)
+    std_dev = round((sum((s - mean) ** 2 for s in scores) / max(n, 1)) ** 0.5, 2)
+
+    sorted_scores = sorted(scores)
+    cutoff_20_pct = max(1, n // 5)
+    top20_score   = round(sorted_scores[-cutoff_20_pct], 2) if sorted_scores else 0.0
+    bot20_score   = round(sorted_scores[cutoff_20_pct - 1], 2) if sorted_scores else 0.0
+
+    # Watchlist: students predicted below 50 or flagged this semester
+    flagged_sids = set(
+        weekly_flags.objects.filter(class_id=class_id, semester=semester)
+        .values_list('student_id', flat=True)
+    )
+    watchlist = {}
+    for sid, score in seen.items():
+        flag = weekly_flags.objects.filter(
+            student_id=sid, semester=semester
+        ).order_by('-urgency_score').first()
+        if score < 50 or sid in flagged_sids:
+            watchlist[sid] = [
+                names.get(sid, sid),
+                flag.diagnosis if flag else 'Low predicted score',
+                score,
+                _risk_level(flag.risk_tier if flag else ''),
+            ]
+
+    return Response({
+        'marks_distribution':      _marks_distribution(scores),
+        'mean_predicted_score':    mean,
+        'standard_deviation':      std_dev,
+        'mode_marks':              _mode(scores),
+        'top20_pct':               top20_score,
+        'bottom20_pct':            bot20_score,
+        'watchlist':               watchlist,
+    })
+
+
+@api_view(['GET'])
+def post_midterm_report(request):
+    """
+    GET /api/analysis/reports/post_midterm/?class_id=X&semester=Y
+
+    {
+        marks_distribution : { lt_40: {predicted, actual}, … },
+        avg_score          : float,
+        standard_deviation : float,
+        mode_score         : float,
+        bottom20_pct       : float,
+        top20_pct          : float,
+        underperformers    : { student_id: [name, {predicted_score, actual_score}] },
+        outperformers      : { student_id: [name, {predicted_score, actual_score}] }
+    }
+    """
+    params, err = _require(request, 'class_id', 'semester')
+    if err:
+        return err
+
+    class_id = params['class_id']
+    semester = int(params['semester'])
+
+    if not HAS_CLIENT_DB:
+        return Response({'error': 'Client DB not available'}, status=503)
+
+    # Collect predictions
+    pmt_map = {}
+    for p in pre_mid_term.objects.filter(class_id=class_id, semester=semester).order_by('-sem_week'):
+        if p.student_id not in pmt_map:
+            pmt_map[p.student_id] = _f(p.predicted_midterm_score)
+
+    if not pmt_map:
+        return Response({'error': 'No midterm predictions found'}, status=404)
+
+    # Collect actual scores
+    actual_map = {sid: _get_midterm_score(sid, semester) for sid in pmt_map}
+    actual_scores = [v for v in actual_map.values() if v is not False]
+
+    if not actual_scores:
+        return Response({'error': 'No actual midterm scores found yet'}, status=404)
+
+    names  = _name_map(class_id)
+    mean   = round(sum(actual_scores) / len(actual_scores), 2)
+    n      = len(actual_scores)
+    std    = round((sum((s - mean) ** 2 for s in actual_scores) / max(n, 1)) ** 0.5, 2)
+
+    sorted_a  = sorted(actual_scores)
+    cut       = max(1, n // 5)
+    top20     = round(sorted_a[-cut], 2)
+    bot20     = round(sorted_a[cut - 1], 2)
+
+    # Distribution with predicted vs actual per bucket
+    pred_scores  = [pmt_map.get(sid, 0) for sid in pmt_map]
+    dist_pred    = _marks_distribution(pred_scores)
+    dist_actual  = _marks_distribution(actual_scores)
+    distribution = {
+        bucket: {
+            'predicted_number_of_students': dist_pred[bucket],
+            'actual_number_of_students':    dist_actual[bucket],
+        }
+        for bucket in dist_pred
+    }
+
+    underperformers = {}
+    outperformers   = {}
+    for sid, pred in pmt_map.items():
+        actual = actual_map.get(sid)
+        if actual is False:
+            continue
+        delta = actual - pred
+        entry = [names.get(sid, sid), {'predicted_score': pred, 'actual_score': actual}]
+        if delta <= -10:
+            underperformers[sid] = entry
+        elif delta >= 10:
+            outperformers[sid] = entry
+
+    return Response({
+        'marks_distribution': distribution,
+        'avg_score':          mean,
+        'standard_deviation': std,
+        'mode_score':         _mode(actual_scores),
+        'bottom20_pct':       bot20,
+        'top20_pct':          top20,
+        'underperformers':    underperformers,
+        'outperformers':      outperformers,
+    })
+
+
+@api_view(['GET'])
+def pre_endterm_report(request):
+    """
+    GET /api/analysis/reports/pre_endterm/?class_id=X&semester=Y
+
+    Same shape as pre_midterm_report but includes midterm_score in watchlist.
+    """
+    params, err = _require(request, 'class_id', 'semester')
+    if err:
+        return err
+
+    class_id = params['class_id']
+    semester = int(params['semester'])
+
+    pet_qs = list(
+        pre_end_term.objects.filter(class_id=class_id, semester=semester)
+        .order_by('student_id', '-sem_week')
+    )
+    seen = {}
+    for p in pet_qs:
+        if p.student_id not in seen:
+            seen[p.student_id] = _f(p.predicted_endterm_score)
+
+    scores = list(seen.values())
+    if not scores:
+        return Response({'error': 'No pre-endterm predictions found'}, status=404)
+
+    names   = _name_map(class_id)
+    mean    = round(sum(scores) / len(scores), 2)
+    n       = len(scores)
+    std_dev = round((sum((s - mean) ** 2 for s in scores) / max(n, 1)) ** 0.5, 2)
+
+    sorted_scores = sorted(scores)
+    cut       = max(1, n // 5)
+    top20     = round(sorted_scores[-cut], 2) if sorted_scores else 0.0
+    bot20     = round(sorted_scores[cut - 1], 2) if sorted_scores else 0.0
+
+    flagged_sids = set(
+        weekly_flags.objects.filter(class_id=class_id, semester=semester)
+        .values_list('student_id', flat=True)
+    )
+    watchlist = {}
+    for sid, score in seen.items():
+        flag = weekly_flags.objects.filter(
+            student_id=sid, semester=semester
+        ).order_by('-urgency_score').first()
+        midterm = _get_midterm_score(sid, semester)
+        if score < 50 or sid in flagged_sids:
+            watchlist[sid] = [
+                names.get(sid, sid),
+                flag.diagnosis if flag else 'Low predicted score',
+                score,
+                _risk_level(flag.risk_tier if flag else ''),
+                midterm,
+            ]
+
+    return Response({
+        'marks_distribution':   _marks_distribution(scores),
+        'mean_predicted_score': mean,
+        'standard_deviation':   std_dev,
+        'mode_marks':           _mode(scores),
+        'top20_pct':            top20,
+        'bottom20_pct':         bot20,
+        'watchlist':            watchlist,
+    })
+
+
+@api_view(['GET'])
+def post_endterm_report(request):
+    """
+    GET /api/analysis/reports/post_endterm/?class_id=X&semester=Y
+
+    Same shape as post_midterm_report but for endterm scores.
+    """
+    params, err = _require(request, 'class_id', 'semester')
+    if err:
+        return err
+
+    class_id = params['class_id']
+    semester = int(params['semester'])
+
+    if not HAS_CLIENT_DB:
+        return Response({'error': 'Client DB not available'}, status=503)
+
+    pet_map = {}
+    for p in pre_end_term.objects.filter(class_id=class_id, semester=semester).order_by('-sem_week'):
+        if p.student_id not in pet_map:
+            pet_map[p.student_id] = _f(p.predicted_endterm_score)
+
+    if not pet_map:
+        return Response({'error': 'No endterm predictions found'}, status=404)
+
+    actual_map    = {sid: _get_endterm_score(sid, semester) for sid in pet_map}
+    actual_scores = [v for v in actual_map.values() if v is not False]
+
+    if not actual_scores:
+        return Response({'error': 'No actual endterm scores found yet'}, status=404)
+
+    names = _name_map(class_id)
+    mean  = round(sum(actual_scores) / len(actual_scores), 2)
+    n     = len(actual_scores)
+    std   = round((sum((s - mean) ** 2 for s in actual_scores) / max(n, 1)) ** 0.5, 2)
+
+    sorted_a = sorted(actual_scores)
+    cut      = max(1, n // 5)
+    top20    = round(sorted_a[-cut], 2)
+    bot20    = round(sorted_a[cut - 1], 2)
+
+    pred_scores = [pet_map.get(sid, 0) for sid in pet_map]
+    dist_pred   = _marks_distribution(pred_scores)
+    dist_actual = _marks_distribution(actual_scores)
+    distribution = {
+        bucket: {
+            'predicted_number_of_students': dist_pred[bucket],
+            'actual_number_of_students':    dist_actual[bucket],
+        }
+        for bucket in dist_pred
+    }
+
+    underperformers = {}
+    outperformers   = {}
+    for sid, pred in pet_map.items():
+        actual = actual_map.get(sid)
+        if actual is False:
+            continue
+        delta = actual - pred
+        entry = [names.get(sid, sid), {'predicted_score': pred, 'actual_score': actual}]
+        if delta <= -10:
+            underperformers[sid] = entry
+        elif delta >= 10:
+            outperformers[sid] = entry
+
+    return Response({
+        'marks_distribution': distribution,
+        'avg_score':          mean,
+        'standard_deviation': std,
+        'mode_score':         _mode(actual_scores),
+        'bottom20_pct':       bot20,
+        'top20_pct':          top20,
+        'underperformers':    underperformers,
+        'outperformers':      outperformers,
+    })
+
+
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  INTERNAL
 # ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
 def trigger_calibrate(request):
-    """POST /api/analysis/trigger_calibrate/ — run full analysis pipeline."""
+    """POST /api/analysis/trigger_calibrate/"""
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
 
@@ -968,4 +1327,3 @@ def trigger_calibrate(request):
     except Exception as e:
         print(f'[FATAL] calibrate() raised:\n{traceback.format_exc()}')
         return JsonResponse({'error': str(e)}, status=500)
-

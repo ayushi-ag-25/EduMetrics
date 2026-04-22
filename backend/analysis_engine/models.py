@@ -44,7 +44,7 @@ class weekly_metrics(models.Model):
     id          = models.AutoField(primary_key=True)
     student_id  = models.CharField(max_length=10)
     class_id    = models.CharField(max_length=20)
-    semester    = models.IntegerField()
+    semester    = models.IntegerField() 
     sem_week    = models.IntegerField()          # 1-18, never 8 or 18
     computed_at = models.DateTimeField(auto_now_add=True)
 
@@ -68,6 +68,9 @@ class weekly_metrics(models.Model):
     risk_of_detention = models.DecimalField(max_digits=5, decimal_places=2, null=True)
     overall_att_pct   = models.DecimalField(max_digits=5, decimal_places=2, null=True)
 
+    # risk score 
+    risk_score = models.IntegerField(null=True, blank=True, default=None)
+    
     class Meta:
         db_table = 'weekly_metrics'
         constraints = [
@@ -77,8 +80,8 @@ class weekly_metrics(models.Model):
             )
         ]
         indexes = [
-            models.Index(fields=['class_id', 'semester', 'sem_week'], name='idx_wm_class_sem_week'),
-            models.Index(fields=['student_id'],                        name='idx_wm_student'),
+            models.Index(fields=['class_id', 'semester', 'sem_week']),
+            models.Index(fields=['student_id', 'semester', 'sem_week']),
         ]
 
     def __str__(self):
@@ -189,7 +192,6 @@ RiskOfFailingPrediction = risk_of_failing   # legacy alias
 
 # ============================================================
 # 6. WEEKLY FLAGS
-#    archetype is an engine enrichment not in the base SQL
 #    schema but written by flagging.py and read by the portal.
 # ============================================================
 class weekly_flags(models.Model):
@@ -203,12 +205,12 @@ class weekly_flags(models.Model):
     risk_tier        = models.CharField(max_length=40)
     urgency_score    = models.IntegerField()
     escalation_level = models.IntegerField(default=0)
-    archetype        = models.CharField(max_length=50, null=True, blank=True)
     diagnosis        = models.TextField()
 
     helpful          = models.BooleanField(null=True, default=None)
     feedback_at      = models.DateTimeField(null=True, blank=True)
 
+    
     class Meta:
         db_table = 'weekly_flags'
         constraints = [
@@ -218,8 +220,8 @@ class weekly_flags(models.Model):
         )
     ]
         indexes = [
-            models.Index(fields=['class_id', 'semester', 'sem_week'], name='idx_wf_class_sem_week'),
-            models.Index(fields=['student_id'],                        name='idx_wf_student'),
+            models.Index(fields=['class_id', 'semester', 'sem_week']),
+            models.Index(fields=['student_id', 'semester']),
         ]
 
     def __str__(self):

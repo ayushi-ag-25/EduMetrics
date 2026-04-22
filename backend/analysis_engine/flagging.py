@@ -29,7 +29,7 @@ from analysis_engine.client_models import (
 # ── Analysis DB models (route → default) ─────────────────────
 # Import your actual analysis models here.
 # These must already exist in analysis_engine/models.py
-from analysis_engine.models import WeeklyFlag, InterventionLog
+from analysis_engine.models import WeeklyFlag, InterventionLog, weekly_metrics
 
 # ── Django ORM helpers ────────────────────────────────────────
 from django.db import transaction
@@ -72,6 +72,7 @@ def _get_sim_context():
         cls.class_id: (cls.odd_sem if slot == 'odd' else cls.even_sem)
         for cls in classes
     }
+    # in last sem map looks like {'CSE_Y1_A': 2,'CSE_Y2_A': 4,'CSE_Y3_A': 6,'CSE_Y4_A': 8} if sem is even 
 
     # Baseline window: up to 4 teaching weeks before current sem_week
     baseline_weeks = []
@@ -85,7 +86,7 @@ def _get_sim_context():
         'global_week':     global_week,
         'sem_week':        sem_week,
         'slot':            slot,
-        'sem_map':         sem_map,
+        'sem_map':         sem_map,          
         'classes':         classes,
         'baseline_weeks':  baseline_weeks,
         'is_grace_period': sem_week <= 3,
@@ -259,14 +260,26 @@ def _fetch_exams(sem_map, current_sem_week):
 
 def generate_weekly_triage(capacity_limit=8,sem_week=None, semester=None):
     print("Initializing Weekly Rule-Based Triage Engine...")
- 
-    ctx            = _get_sim_context()
-    if sem_week is None:
+    
+    # when we remove calibrate_analysis_db
+    if not(sem_week or semester):
+        ctx            = _get_sim_context()
         sem_week = ctx['sem_week']
-    rep_semester = semester if semester else next(iter(ctx['sem_map'].values()))
-    sem_map        = ctx['sem_map']
-    is_grace       = sem_week <= 3
- 
+        rep_semester = next(iter(ctx['sem_map'].values()))
+        sem_map        = ctx['sem_map']
+        is_grace       = sem_week <= 3
+    # when we work with calibrate_analysis_db.py
+    else:
+        classes = list(ClientClass.objects.using('client_db').all())
+        # this part could be wrong
+        sem_map = {
+        cls.class_id: (cls.odd_sem if semester == 1 else cls.even_sem)
+        for cls in classes
+        }
+        is_grace=False
+        rep_semester = semester
+
+
     # Recompute baseline_weeks from the actual sem_week being processed,
     # NOT from ctx (which always reflects the live client DB week).
     baseline_weeks = []
@@ -275,8 +288,6 @@ def generate_weekly_triage(capacity_limit=8,sem_week=None, semester=None):
         if w not in EXAM_WEEKS:
             baseline_weeks.append(w)
         w -= 1
-
-    rep_semester = next(iter(sem_map.values()))
 
     print(f"  sem_week={sem_week}  semester={rep_semester}  "
           f"baseline={baseline_weeks}  grace={is_grace}")
@@ -351,8 +362,9 @@ def generate_weekly_triage(capacity_limit=8,sem_week=None, semester=None):
     }
 
     # ── Triage loop ───────────────────────────────────────────
-    interventions = []
-    new_memory    = {}
+    interventions  = []
+    new_memory     = {}
+    risk_score_map = {}   # { student_id → raw risk score (pre-escalation) }
 
     for stu in students:
         sid  = stu['student_id']
@@ -401,6 +413,12 @@ def generate_weekly_triage(capacity_limit=8,sem_week=None, semester=None):
         if not is_grace and assn_now_rate == 0 and assn_hist_rate > 0:
             score += 40
             diagnoses.append('Stopped Submitting')
+
+        # Record raw risk score for every student (0 when no issues found).
+        # This is written to weekly_metrics.risk_score regardless of whether
+        # the student ends up flagged — weeks 1-3 will stay NULL in the DB
+        # because generate_weekly_triage() is not called during that period.
+        risk_score_map[sid] = score
 
         # Compound + escalation boost
         if score > 0:
@@ -457,7 +475,6 @@ def generate_weekly_triage(capacity_limit=8,sem_week=None, semester=None):
                 risk_tier       = row['risk_tier'],
                 urgency_score   = row['urgency_score'],
                 escalation_level= row['escalation_level'],
-                archetype       = row.get('archetype'),
                 diagnosis       = row['diagnosis'],
             )
             for row in top_interventions
@@ -478,6 +495,30 @@ def generate_weekly_triage(capacity_limit=8,sem_week=None, semester=None):
     _save_memory(new_memory, sem_week, rep_semester)
     print(f"  Escalation memory updated — {len(new_memory)} student(s) logged "
           f"→ intervention_log")
+
+    # ── Write risk_score back into weekly_metrics ─────────────
+    # Fetch all weekly_metrics rows for this (semester, sem_week) that belong
+    # to students we just scored, then bulk-update risk_score in one query.
+    if risk_score_map:
+        wm_qs = weekly_metrics.objects.filter(
+            semester=rep_semester,
+            sem_week=sem_week,
+            student_id__in=list(risk_score_map.keys()),
+        )
+
+        rows_to_update = []
+        for wm in wm_qs:
+            new_score = risk_score_map.get(wm.student_id)
+            if new_score is not None:
+                wm.risk_score = new_score
+                rows_to_update.append(wm)
+
+        if rows_to_update:
+            weekly_metrics.objects.bulk_update(rows_to_update, ['risk_score'])
+            print(f"  risk_score written → weekly_metrics "
+                  f"({len(rows_to_update)} row(s), sem {rep_semester}, week {sem_week})")
+        else:
+            print("  risk_score: no matching weekly_metrics rows found for this week.")
 
 
 # ── Standalone entry point ────────────────────────────────────

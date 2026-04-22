@@ -612,14 +612,21 @@ def _compute_detention_risk(overall_att_pct):
 def run(sem_week=None, semester=None):
     print('  [weekly_metrics] Starting...')
 
-    ctx          = _get_sim_context()
-    if sem_week is None:
+    # when we eventually replace calibrate_analysis_db.py
+    if not(sem_week or semester):
+        ctx          = _get_sim_context()
         sem_week = ctx['sem_week']
-    sem_map      = ctx['sem_map']
-    rep_semester = next(iter(sem_map.values()))
-    if semester is None:
-        semester = rep_semester
-
+        sem_map      = ctx['sem_map']
+        rep_semester = next(iter(sem_map.values()))
+    else:
+        rep_semester=semester
+        classes = list(ClientClass.objects.using('client_db').all())
+        # this part could be wrong
+        sem_map = {
+        cls.class_id: (cls.odd_sem if semester == 1 else cls.even_sem)
+        for cls in classes
+        }
+        
     print(f'  sem_week={sem_week}  semester={rep_semester}')
 
     # ── Exam week: write NULL rows to preserve the timeline ───────────────────
